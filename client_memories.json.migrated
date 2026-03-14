@@ -1,0 +1,87 @@
+{
+  "27827764211720@lid": {
+    "phone": "27827764211720@lid",
+    "created_at": "2026-03-10T18:13:46.595Z",
+    "last_updated": "2026-03-10T18:38:49.577Z",
+    "personal": {
+      "name": null,
+      "location": null,
+      "age_group": null
+    },
+    "hair_health": {
+      "baldness_degree": null,
+      "hair_condition": null,
+      "concerns": [],
+      "allergies": [],
+      "medical_conditions": []
+    },
+    "conversation": {
+      "total_messages": 0,
+      "first_contact": "2026-03-10T18:13:46.597Z",
+      "topics_discussed": [],
+      "questions_asked": [
+        {
+          "question": "Lembra meu nome?",
+          "timestamp": "2026-03-10T18:38:49.576Z"
+        }
+      ],
+      "objections": []
+    },
+    "preferences": {
+      "tone": "professional",
+      "pace": "normal",
+      "communication_style": "mixed",
+      "preferred_language": "pt-BR",
+      "time_zone": "America/Sao_Paulo"
+    },
+    "funnel_stage": "awareness",
+    "purchase_likelihood": "low",
+    "next_step": null,
+    "appointments": {
+      "scheduled": [],
+      "completed": [],
+      "cancelled": []
+    },
+    "notes": []
+  },
+  "167255035912336@lid": {
+    "phone": "167255035912336@lid",
+    "created_at": "2026-03-10T23:47:10.473Z",
+    "last_updated": "2026-03-10T23:47:49.931Z",
+    "personal": {
+      "name": null,
+      "location": null,
+      "age_group": null
+    },
+    "hair_health": {
+      "baldness_degree": null,
+      "hair_condition": null,
+      "concerns": [],
+      "allergies": [],
+      "medical_conditions": []
+    },
+    "conversation": {
+      "total_messages": 0,
+      "first_contact": "2026-03-10T23:47:10.475Z",
+      "topics_discussed": [],
+      "questions_asked": [],
+      "objections": []
+    },
+    "preferences": {
+      "tone": "professional",
+      "pace": "normal",
+      "communication_style": "mixed",
+      "preferred_language": "pt-BR",
+      "time_zone": "America/Sao_Paulo"
+    },
+    "funnel_stage": "awareness",
+    "purchase_likelihood": "low",
+    "next_step": null,
+    "appointments": {
+      "scheduled": [],
+      "completed": [],
+      "cancelled": []
+    },
+    "notes": []
+  }
+}

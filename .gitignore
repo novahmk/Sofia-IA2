@@ -1,0 +1,36 @@
+# Variáveis de ambiente (NUNCA versionar)
+.env
+
+# Dependências
+node_modules/
+
+# Dados persistentes (contém dados de clientes)
+client_memories.json
+conversation_states.json
+appointments.json
+clients_data.json
+knowledge_base.json
+
+# Banco de dados SQLite
+sofia.db
+
+# Logs
+sofia.log
+healing_log.json
+
+# Arquivos temporários
+temp_audio/
+*.ogg
+*.mp3
+*.wav
+
+# Credenciais Google
+google-credentials.json
+
+# Auth do WhatsApp (legado)
+.wwebjs_auth/
+.wwebjs_cache/
+
+# OS
+.DS_Store
+Thumbs.db

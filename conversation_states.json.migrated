@@ -1,0 +1,88 @@
+{
+  "27827764211720@lid": {
+    "status": "active",
+    "mode": "auto",
+    "sofiaActive": true,
+    "humanEngaged": false,
+    "firstMessageTime": 1773166426577,
+    "lastMessageTime": 1773167954383,
+    "messageCount": 8,
+    "humanTakeoverTime": null,
+    "autoResumeTime": null,
+    "conversationHistory": [
+      {
+        "timestamp": "2026-03-10T18:13:53.491Z",
+        "sender": "client",
+        "text": "Olá"
+      },
+      {
+        "timestamp": "2026-03-10T18:14:10.041Z",
+        "sender": "sofia",
+        "text": "Oi! Como posso te ajudar hoje?"
+      },
+      {
+        "timestamp": "2026-03-10T18:19:44.237Z",
+        "sender": "client",
+        "text": "Olá"
+      },
+      {
+        "timestamp": "2026-03-10T18:20:09.919Z",
+        "sender": "sofia",
+        "text": "Oi! Como posso te ajudar hoje?"
+      },
+      {
+        "timestamp": "2026-03-10T18:38:03.607Z",
+        "sender": "client",
+        "text": "Teste"
+      },
+      {
+        "timestamp": "2026-03-10T18:38:32.145Z",
+        "sender": "sofia",
+        "text": "Oi! Como posso ajudar você hoje? Está pensando em algo específico sobre transplante capilar?"
+      },
+      {
+        "timestamp": "2026-03-10T18:38:49.578Z",
+        "sender": "client",
+        "text": "Lembra meu nome?"
+      },
+      {
+        "timestamp": "2026-03-10T18:39:14.383Z",
+        "sender": "sofia",
+        "text": "Parece que esta é a primeira vez que conversamos, então não temos seu nome registrado ainda. Como po"
+      }
+    ]
+  },
+  "167255035912336@lid": {
+    "status": "active",
+    "mode": "auto",
+    "sofiaActive": true,
+    "humanEngaged": false,
+    "firstMessageTime": 1773186430462,
+    "lastMessageTime": 1773186494680,
+    "messageCount": 4,
+    "humanTakeoverTime": null,
+    "autoResumeTime": null,
+    "conversationHistory": [
+      {
+        "timestamp": "2026-03-10T23:47:16.727Z",
+        "sender": "client",
+        "text": "Oi"
+      },
+      {
+        "timestamp": "2026-03-10T23:47:36.749Z",
+        "sender": "sofia",
+        "text": "Oi! Como posso te ajudar hoje?"
+      },
+      {
+        "timestamp": "2026-03-10T23:47:49.932Z",
+        "sender": "client",
+        "text": "Prazer me chamo Vithor, gostaria de saber sobre transplante capilar"
+      },
+      {
+        "timestamp": "2026-03-10T23:48:14.680Z",
+        "sender": "sofia",
+        "text": "Prazer, Vithor! 😊 Vamos falar sobre transplante capilar, então. \n\nAqui na Quality Hair, a gente se "
+      }
+    ]
+  }
+}
