@@ -421,36 +421,59 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // Webhook da Z-API
+    // Webhook do Twilio WhatsApp
     if (req.method === 'POST' && req.url === '/webhook') {
         let body = '';
         
         req.on('data', chunk => { body += chunk; });
         
         req.on('end', () => {
-            // Responder 200 imediatamente (processamento assíncrono)
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ received: true }));
+            // Responder 200 imediatamente (Twilio exige resposta rápida)
+            res.writeHead(200, { 'Content-Type': 'text/xml' });
+            res.end('<Response></Response>');
 
             try {
-                const webhookData = JSON.parse(body);
+                // Twilio envia dados como application/x-www-form-urlencoded
+                const params = new URLSearchParams(body);
+                const from = params.get('From') || '';        // whatsapp:+5511999999999
+                const msgBody = params.get('Body') || '';
+                const numMedia = parseInt(params.get('NumMedia') || '0', 10);
+                const messageSid = params.get('MessageSid') || '';
 
-                // A Z-API envia diferentes tipos de evento
-                // Processar apenas mensagens recebidas (não status, ACK, etc.)
-                if (webhookData.event === 'message-status-update' || 
-                    webhookData.event === 'connected' ||
-                    webhookData.event === 'disconnected') {
-                    return;
+                // Extrair número limpo (remover "whatsapp:" prefixo e "+")
+                const userPhone = from.replace('whatsapp:', '').replace('+', '');
+                if (!userPhone) return;
+
+                console.log(`\n📩 Webhook Twilio recebido de ${userPhone} | SID: ${messageSid}`);
+
+                // Montar dados no formato que processIncomingMessage espera
+                const webhookData = {
+                    phone: userPhone,
+                    fromMe: false,
+                    isGroup: false,
+                    text: { message: msgBody, body: msgBody }
+                };
+
+                // Verificar mídias (áudio, imagem, etc.)
+                if (numMedia > 0) {
+                    const mediaType = (params.get('MediaContentType0') || '').toLowerCase();
+                    const mediaUrl = params.get('MediaUrl0') || '';
+
+                    if (mediaType.startsWith('audio/')) {
+                        webhookData.audio = { audioUrl: mediaUrl, fileUrl: mediaUrl, url: mediaUrl };
+                    } else if (mediaType.startsWith('image/')) {
+                        webhookData.image = { imageUrl: mediaUrl };
+                    } else if (mediaType.startsWith('video/')) {
+                        webhookData.video = { videoUrl: mediaUrl };
+                    } else {
+                        webhookData.document = { documentUrl: mediaUrl };
+                    }
                 }
-
-                // Log do webhook recebido
-                const phone = webhookData.phone || 'unknown';
-                console.log(`\n📩 Webhook recebido de ${phone} [${webhookData.event || 'message'}]`);
 
                 processIncomingMessage(webhookData);
 
             } catch (parseError) {
-                console.error('❌ Erro ao parsear webhook:', parseError.message);
+                console.error('❌ Erro ao parsear webhook Twilio:', parseError.message);
             }
         });
         
@@ -467,7 +490,7 @@ const server = http.createServer((req, res) => {
 async function start() {
     console.log('\n======================================================');
     console.log('🤖 SOFIA AGENT - QUALITY HAIR');
-    console.log('📡 Modo: Webhook API');
+    console.log('📡 Modo: Twilio WhatsApp Webhook');
     console.log('======================================================\n');
 
     // Verificar status do cliente de mensagens
