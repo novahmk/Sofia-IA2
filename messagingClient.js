@@ -49,6 +49,34 @@ class MessagingClient {
     }
 
     /**
+     * Envia mensagem usando Content Template do Twilio
+     * @param {string} phoneNumber - Número do destinatário
+     * @param {string} contentSid - SID do template (ex: HXb5b62575e6e4ff6129ad7c8efe1f983e)
+     * @param {object} variables - Variáveis do template (ex: { "1": "12/1", "2": "3pm" })
+     */
+    async sendTemplate(phoneNumber, contentSid, variables = {}) {
+        if (!this.client) {
+            console.log(`📤 [MOCK] Template ${contentSid} para ${phoneNumber}`);
+            return;
+        }
+
+        const to = this._formatNumber(phoneNumber);
+        const params = {
+            from: this.fromNumber,
+            to,
+            contentSid
+        };
+
+        if (Object.keys(variables).length > 0) {
+            params.contentVariables = JSON.stringify(variables);
+        }
+
+        const result = await this.client.messages.create(params);
+        console.log(`📤 [Twilio] Template enviado para ${to} | SID: ${result.sid} | Template: ${contentSid}`);
+        return result;
+    }
+
+    /**
      * Envia indicador de "digitando..." (Twilio não suporta nativamente)
      */
     async sendTyping(phoneNumber) {
