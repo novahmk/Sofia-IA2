@@ -1,25 +1,28 @@
 /**
  * Database Layer — PostgreSQL
- * Mantém a mesma API pública do módulo SQLite anterior para que os outros
- * módulos (conversationManager, clientMemory, auditLogger, functionCalling)
- * não precisem ser alterados.
- *
- * Variável obrigatória no Railway: DATABASE_URL (injetada automaticamente
- * quando você adiciona o plugin PostgreSQL ao projeto).
+ * Expõe uma API síncrona em memória e persiste em background no PostgreSQL.
+ * Isso mantém compatibilidade com os módulos existentes, que foram escritos
+ * esperando leitura síncrona do banco local.
  */
 
 const { Pool } = require('pg');
 
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
-    max: 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
-});
+const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
+const pool = hasDatabaseUrl
+    ? new Pool({
+        connectionString: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false },
+        max: 10,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 5000,
+    })
+    : null;
 
-// Helper interno — executa uma query e devolve o result do pg
 async function _query(text, params = []) {
+    if (!pool) {
+        throw new Error('DATABASE_URL não configurada');
+    }
+
     const client = await pool.connect();
     try {
         return await client.query(text, params);
@@ -34,150 +37,258 @@ function _assertKvTable(table) {
     if (!KV_TABLES.has(table)) throw new Error(`Tabela inválida: ${table}`);
 }
 
+function _serializeJsonb(value) {
+    return JSON.stringify(typeof value === 'undefined' ? null : value);
+}
+
 class SofiaDatabase {
+    constructor() {
+        this.kvCache = {
+            client_memories: {},
+            conversation_states: {},
+            clients_data: {},
+        };
+        this.appointments = [];
+        this.auditLog = [];
+        this.hydrated = false;
+
+        this.ready = this._hydrate();
+    }
+
+    async _hydrate() {
+        if (!pool) {
+            console.warn('⚠️ PostgreSQL não configurado. Usando cache local em memória.');
+            return;
+        }
+
+        try {
+            const [memories, conversationStates, clientsData, appointments, auditLog] = await Promise.all([
+                _query('SELECT phone, data FROM client_memories'),
+                _query('SELECT phone, data FROM conversation_states'),
+                _query('SELECT phone, data FROM clients_data'),
+                _query('SELECT * FROM appointments ORDER BY date, time'),
+                _query('SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 1000'),
+            ]);
+
+            this._replaceKvCache('client_memories', memories.rows);
+            this._replaceKvCache('conversation_states', conversationStates.rows);
+            this._replaceKvCache('clients_data', clientsData.rows);
+            this._replaceArray(this.appointments, appointments.rows);
+            this._replaceArray(this.auditLog, auditLog.rows);
+
+            this.hydrated = true;
+            console.log('🗄️  Database PostgreSQL conectado e cache carregado');
+        } catch (err) {
+            console.error(`❌ Falha ao hidratar cache do PostgreSQL: ${err.message}`);
+        }
+    }
+
+    _replaceKvCache(table, rows) {
+        const target = this.kvCache[table];
+        for (const key of Object.keys(target)) {
+            delete target[key];
+        }
+        for (const row of rows) {
+            target[row.phone] = row.data;
+        }
+    }
+
+    _replaceArray(target, rows) {
+        target.splice(0, target.length, ...rows);
+    }
+
+    _runInBackground(promise, label) {
+        promise.catch((err) => {
+            console.error(`❌ ${label}: ${err.message}`);
+        });
+    }
+
     get(table, phone) {
         _assertKvTable(table);
-        return _query(`SELECT data FROM ${table} WHERE phone = $1`, [phone])
-            .then(r => r.rows[0] ? r.rows[0].data : null)
-            .catch(err => { console.error(`[db.get] ${err.message}`); return null; });
+        return this.kvCache[table][phone] || null;
     }
 
     set(table, phone, data) {
         _assertKvTable(table);
-        const json = typeof data === 'string' ? data : JSON.stringify(data);
-        return _query(
-            `INSERT INTO ${table} (phone, data, updated_at)
-             VALUES ($1, $2::jsonb, NOW())
-             ON CONFLICT (phone) DO UPDATE
-               SET data = $2::jsonb, updated_at = NOW()`,
-            [phone, json]
-        ).catch(err => console.error(`[db.set] ${err.message}`));
+        this.kvCache[table][phone] = data;
+
+        if (!pool) return;
+
+        this._runInBackground(
+            _query(
+                `INSERT INTO ${table} (phone, data, updated_at)
+                 VALUES ($1, $2::jsonb, NOW())
+                 ON CONFLICT (phone) DO UPDATE
+                   SET data = $2::jsonb, updated_at = NOW()`,
+                [phone, _serializeJsonb(data)]
+            ),
+            `db.set(${table})`
+        );
     }
 
     getAll(table) {
         _assertKvTable(table);
-        return _query(`SELECT phone, data FROM ${table}`)
-            .then(r => {
-                const result = {};
-                for (const row of r.rows) result[row.phone] = row.data;
-                return result;
-            })
-            .catch(err => { console.error(`[db.getAll] ${err.message}`); return {}; });
+        return this.kvCache[table];
     }
 
     delete(table, phone) {
         _assertKvTable(table);
-        return _query(`DELETE FROM ${table} WHERE phone = $1`, [phone])
-            .catch(err => console.error(`[db.delete] ${err.message}`));
+        delete this.kvCache[table][phone];
+
+        if (!pool) return;
+
+        this._runInBackground(
+            _query(`DELETE FROM ${table} WHERE phone = $1`, [phone]),
+            `db.delete(${table})`
+        );
     }
 
     getAppointments() {
-        return _query('SELECT * FROM appointments ORDER BY date, time')
-            .then(r => r.rows)
-            .catch(err => { console.error(`[db.getAppointments] ${err.message}`); return []; });
+        return this.appointments;
     }
 
     getAppointmentsByDate(date) {
-        return _query('SELECT * FROM appointments WHERE date = $1', [date])
-            .then(r => r.rows)
-            .catch(err => { console.error(`[db.getAppointmentsByDate] ${err.message}`); return []; });
+        return this.appointments.filter(appointment => appointment.date === date);
     }
 
     getAppointmentBySlot(date, time) {
-        return _query('SELECT * FROM appointments WHERE date = $1 AND time = $2', [date, time])
-            .then(r => r.rows[0] || null)
-            .catch(err => { console.error(`[db.getAppointmentBySlot] ${err.message}`); return null; });
+        return this.appointments.find(appointment => appointment.date === date && appointment.time === time) || null;
     }
 
     insertAppointment(appointment) {
-        return _query(
-            `INSERT INTO appointments (id, phone, name, date, time, status, type, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-             ON CONFLICT (id) DO NOTHING`,
-            [
-                appointment.id, appointment.phone, appointment.name,
-                appointment.date, appointment.time,
-                appointment.status || 'confirmed',
-                appointment.type || 'consultation',
-                appointment.created_at || new Date().toISOString()
-            ]
-        ).catch(err => console.error(`[db.insertAppointment] ${err.message}`));
+        const existingIndex = this.appointments.findIndex(item => item.id === appointment.id);
+        if (existingIndex >= 0) {
+            this.appointments[existingIndex] = appointment;
+        } else {
+            this.appointments.push(appointment);
+        }
+
+        if (!pool) return;
+
+        this._runInBackground(
+            _query(
+                `INSERT INTO appointments (id, phone, name, date, time, status, type, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 ON CONFLICT (id) DO UPDATE SET
+                   phone = EXCLUDED.phone,
+                   name = EXCLUDED.name,
+                   date = EXCLUDED.date,
+                   time = EXCLUDED.time,
+                   status = EXCLUDED.status,
+                   type = EXCLUDED.type`,
+                [
+                    appointment.id,
+                    appointment.phone,
+                    appointment.name,
+                    appointment.date,
+                    appointment.time,
+                    appointment.status || 'confirmed',
+                    appointment.type || 'consultation',
+                    appointment.created_at || new Date().toISOString(),
+                ]
+            ),
+            'db.insertAppointment'
+        );
+    }
+
+    insertConversationMessage(phone, role, message, mediaType = 'text') {
+        if (!pool) return;
+
+        this._runInBackground(
+            _query(
+                `INSERT INTO conversations (phone, role, message, media_type)
+                 VALUES ($1, $2, $3, $4)`,
+                [phone, role, message, mediaType]
+            ),
+            'db.insertConversationMessage'
+        );
     }
 
     logAudit(action, phone, details) {
-        const detailsJson = typeof details === 'string' ? details : JSON.stringify(details);
-        return _query(
-            'INSERT INTO audit_log (action, phone, details) VALUES ($1, $2, $3)',
-            [action, phone || null, detailsJson]
-        ).catch(err => console.error(`[db.logAudit] ${err.message}`));
+        const entry = {
+            action,
+            phone: phone || null,
+            details,
+            timestamp: new Date().toISOString(),
+        };
+
+        this.auditLog.unshift(entry);
+        if (this.auditLog.length > 1000) {
+            this.auditLog.length = 1000;
+        }
+
+        if (!pool) return;
+
+        this._runInBackground(
+            _query(
+                'INSERT INTO audit_log (action, phone, details) VALUES ($1, $2, $3::jsonb)',
+                [action, phone || null, _serializeJsonb(details)]
+            ),
+            'db.logAudit'
+        );
     }
 
     getAuditLog(phone = null, limit = 50) {
-        if (phone) {
-            return _query(
-                'SELECT * FROM audit_log WHERE phone = $1 ORDER BY timestamp DESC LIMIT $2',
-                [phone, limit]
-            ).then(r => r.rows).catch(err => { console.error(`[db.getAuditLog] ${err.message}`); return []; });
-        }
-        return _query(
-            'SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT $1',
-            [limit]
-        ).then(r => r.rows).catch(err => { console.error(`[db.getAuditLog] ${err.message}`); return []; });
+        const source = phone
+            ? this.auditLog.filter(entry => entry.phone === phone)
+            : this.auditLog;
+
+        return source.slice(0, limit);
     }
 
-    async deleteAllClientData(phone) {
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
-            await client.query('DELETE FROM client_memories WHERE phone = $1', [phone]);
-            await client.query('DELETE FROM conversation_states WHERE phone = $1', [phone]);
-            await client.query('DELETE FROM clients_data WHERE phone = $1', [phone]);
-            await client.query('DELETE FROM appointments WHERE phone = $1', [phone]);
-            await client.query('DELETE FROM consents WHERE phone = $1', [phone]);
-            await client.query(
-                'INSERT INTO audit_log (action, phone, details) VALUES ($1, $2, $3)',
-                ['LGPD_DATA_DELETION', phone, 'Todos os dados do cliente foram apagados']
-            );
-            await client.query('COMMIT');
-        } catch (err) {
-            await client.query('ROLLBACK');
-            console.error(`[db.deleteAllClientData] ${err.message}`);
-            throw err;
-        } finally {
-            client.release();
+    deleteAllClientData(phone) {
+        delete this.kvCache.client_memories[phone];
+        delete this.kvCache.conversation_states[phone];
+        delete this.kvCache.clients_data[phone];
+
+        for (let index = this.appointments.length - 1; index >= 0; index -= 1) {
+            if (this.appointments[index].phone === phone) {
+                this.appointments.splice(index, 1);
+            }
         }
+
+        this.logAudit('LGPD_DATA_DELETION', phone, 'Todos os dados do cliente foram apagados');
+
+        if (!pool) return;
+
+        this._runInBackground(
+            (async () => {
+                const client = await pool.connect();
+                try {
+                    await client.query('BEGIN');
+                    await client.query('DELETE FROM client_memories WHERE phone = $1', [phone]);
+                    await client.query('DELETE FROM conversation_states WHERE phone = $1', [phone]);
+                    await client.query('DELETE FROM clients_data WHERE phone = $1', [phone]);
+                    await client.query('DELETE FROM appointments WHERE phone = $1', [phone]);
+                    await client.query('DELETE FROM consents WHERE phone = $1', [phone]);
+                    await client.query('DELETE FROM conversations WHERE phone = $1', [phone]);
+                    await client.query('COMMIT');
+                } catch (err) {
+                    await client.query('ROLLBACK');
+                    throw err;
+                } finally {
+                    client.release();
+                }
+            })(),
+            'db.deleteAllClientData'
+        );
     }
 
-    async getStats() {
-        try {
-            const [clients, conversations, appointments, auditEntries] = await Promise.all([
-                _query('SELECT COUNT(*) AS count FROM client_memories'),
-                _query('SELECT COUNT(*) AS count FROM conversation_states'),
-                _query('SELECT COUNT(*) AS count FROM appointments'),
-                _query('SELECT COUNT(*) AS count FROM audit_log'),
-            ]);
-            return {
-                clients: parseInt(clients.rows[0].count, 10),
-                conversations: parseInt(conversations.rows[0].count, 10),
-                appointments: parseInt(appointments.rows[0].count, 10),
-                auditEntries: parseInt(auditEntries.rows[0].count, 10),
-                provider: 'postgresql',
-            };
-        } catch (err) {
-            console.error(`[db.getStats] ${err.message}`);
-            return {};
-        }
+    getStats() {
+        return {
+            clients: Object.keys(this.kvCache.client_memories).length,
+            conversations: Object.keys(this.kvCache.conversation_states).length,
+            appointments: this.appointments.length,
+            auditEntries: this.auditLog.length,
+            provider: pool ? 'postgresql' : 'memory',
+            hydrated: this.hydrated,
+        };
     }
 
     close() {
+        if (!pool) return Promise.resolve();
         return pool.end().then(() => console.log('🗄️  Database PostgreSQL fechado'));
     }
 }
 
-const db = new SofiaDatabase();
-
-_query('SELECT 1')
-    .then(() => console.log('🗄️  Database PostgreSQL conectado'))
-    .catch(err => console.error(`❌ Falha ao conectar no PostgreSQL: ${err.message} — Defina DATABASE_URL no Railway`));
-
-module.exports = db;
+module.exports = new SofiaDatabase();

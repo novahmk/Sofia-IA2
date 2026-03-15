@@ -201,6 +201,10 @@ ${state.humanTakeoverTime ? `Modo Humano desde: ${new Date(state.humanTakeoverTi
         const state = this.initializeConversation(phoneNumber);
         state.lastMessageTime = Date.now();
         state.messageCount++;
+
+        if (db) {
+            db.insertConversationMessage(phoneNumber, sender, messageText);
+        }
         
         state.conversationHistory?.push({
             timestamp: new Date().toISOString(),
