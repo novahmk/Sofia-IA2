@@ -1,108 +1,156 @@
 /**
- * Messaging Client — Integração com Twilio WhatsApp API
+ * Messaging Client — Camada de abstração para envio/recebimento de mensagens
+ * 
+ * Substitui a Z-API. Implemente os métodos abaixo com sua nova API de WhatsApp.
+ * Todos os métodos seguem a mesma interface que o resto do sistema espera.
+ * 
+ * Para integrar sua nova API:
+ *   1. Configure as variáveis de ambiente necessárias no .env
+ *   2. Implemente os métodos sendMessage(), sendTyping(), stopTyping(), getStatus()
+ *   3. Pronto — o resto do sistema já funciona automaticamente
  */
 
-const twilio = require('twilio');
+const https = require('https');
 
 class MessagingClient {
     constructor() {
-        const accountSid = process.env.TWILIO_ACCOUNT_SID;
-        const authToken = process.env.TWILIO_AUTH_TOKEN;
-        this.fromNumber = process.env.TWILIO_WHATSAPP_NUMBER || 'whatsapp:+14155238886';
+        this.accountSid = process.env.TWILIO_ACCOUNT_SID || '';
+        this.authToken = process.env.TWILIO_AUTH_TOKEN || '';
+        this.phoneNumber = process.env.TWILIO_PHONE_NUMBER || '';
+        this.baseUrl = this.accountSid
+            ? `https://api.twilio.com/2010-04-01/Accounts/${this.accountSid}`
+            : null;
 
-        if (!accountSid || !authToken) {
-            console.warn('⚠️ TWILIO_ACCOUNT_SID ou TWILIO_AUTH_TOKEN não configurados no .env');
-            this.client = null;
-        } else {
-            this.client = twilio(accountSid, authToken);
-            console.log('📡 Messaging Client Twilio inicializado com sucesso');
-        }
+        console.log(`📡 Messaging Client inicializado (${this.isConfigured() ? 'Twilio configurado' : 'Twilio não configurado'})`);
+    }
+
+    isConfigured() {
+        return Boolean(this.accountSid && this.authToken && this.phoneNumber);
+    }
+
+    normalizePhoneNumber(phoneNumber) {
+        const normalized = String(phoneNumber || '')
+            .replace(/^whatsapp:/, '')
+            .replace(/[\s()-]/g, '')
+            .trim();
+
+        if (!normalized) return '';
+        return normalized.startsWith('+') ? normalized : `+${normalized}`;
+    }
+
+    requestTwilio(method, endpoint, formBody = null) {
+        return new Promise((resolve, reject) => {
+            if (!this.baseUrl) {
+                reject(new Error('Twilio não configurado'));
+                return;
+            }
+
+            const url = new URL(`${this.baseUrl}${endpoint}`);
+            const headers = {
+                Authorization: `Basic ${Buffer.from(`${this.accountSid}:${this.authToken}`).toString('base64')}`,
+            };
+
+            if (formBody) {
+                headers['Content-Type'] = 'application/x-www-form-urlencoded';
+                headers['Content-Length'] = Buffer.byteLength(formBody);
+            }
+
+            const req = https.request(url, { method, headers }, (res) => {
+                let responseBody = '';
+                res.setEncoding('utf8');
+                res.on('data', chunk => { responseBody += chunk; });
+                res.on('end', () => {
+                    let parsedBody = responseBody;
+
+                    try {
+                        parsedBody = responseBody ? JSON.parse(responseBody) : {};
+                    } catch (error) {
+                        // Twilio retorna JSON na API usada aqui; se falhar, preservar body bruto.
+                    }
+
+                    if (res.statusCode >= 200 && res.statusCode < 300) {
+                        resolve(parsedBody);
+                        return;
+                    }
+
+                    const errorMessage = typeof parsedBody === 'object'
+                        ? parsedBody.message || JSON.stringify(parsedBody)
+                        : responseBody;
+                    reject(new Error(`Twilio HTTP ${res.statusCode}: ${errorMessage}`));
+                });
+            });
+
+            req.on('error', reject);
+
+            if (formBody) {
+                req.write(formBody);
+            }
+
+            req.end();
+        });
     }
 
     /**
-     * Formata número para o padrão Twilio WhatsApp
-     * Aceita: "5511999999999", "5511999999999@c.us", "whatsapp:+5511999999999"
-     */
-    _formatNumber(phoneNumber) {
-        if (phoneNumber.startsWith('whatsapp:')) return phoneNumber;
-        const cleaned = phoneNumber.replace('@c.us', '').replace(/\D/g, '');
-        return `whatsapp:+${cleaned}`;
-    }
-
-    /**
-     * Envia mensagem de texto via Twilio WhatsApp
+     * Envia mensagem de texto para um número
+     * @param {string} phoneNumber - Número no formato internacional (ex: 5511999999999)
+     * @param {string} message - Texto da mensagem
      */
     async sendMessage(phoneNumber, message) {
-        if (!this.client) {
-            console.log(`📤 [MOCK] Mensagem para ${phoneNumber}: "${message.substring(0, 80)}..."`);
-            return;
+        if (!this.isConfigured()) {
+            console.warn('⚠️ Twilio não configurado. Mensagem não enviada. Defina TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN e TWILIO_PHONE_NUMBER.');
+            return { queued: false, reason: 'twilio_not_configured' };
         }
 
-        const to = this._formatNumber(phoneNumber);
-        const result = await this.client.messages.create({
-            from: this.fromNumber,
-            to,
-            body: message
-        });
-        console.log(`📤 [Twilio] Mensagem enviada para ${to} | SID: ${result.sid}`);
-        return result;
+        const to = this.normalizePhoneNumber(phoneNumber);
+        const from = this.normalizePhoneNumber(this.phoneNumber);
+        const formBody = new URLSearchParams({
+            From: `whatsapp:${from}`,
+            To: `whatsapp:${to}`,
+            Body: message,
+        }).toString();
+
+        const response = await this.requestTwilio('POST', '/Messages.json', formBody);
+        console.log(`📤 [MessagingClient] Mensagem para ${phoneNumber}: "${message.substring(0, 80)}..."`);
+        return response;
     }
 
     /**
-     * Envia mensagem usando Content Template do Twilio
-     * @param {string} phoneNumber - Número do destinatário
-     * @param {string} contentSid - SID do template (ex: HXb5b62575e6e4ff6129ad7c8efe1f983e)
-     * @param {object} variables - Variáveis do template (ex: { "1": "12/1", "2": "3pm" })
-     */
-    async sendTemplate(phoneNumber, contentSid, variables = {}) {
-        if (!this.client) {
-            console.log(`📤 [MOCK] Template ${contentSid} para ${phoneNumber}`);
-            return;
-        }
-
-        const to = this._formatNumber(phoneNumber);
-        const params = {
-            from: this.fromNumber,
-            to,
-            contentSid
-        };
-
-        if (Object.keys(variables).length > 0) {
-            params.contentVariables = JSON.stringify(variables);
-        }
-
-        const result = await this.client.messages.create(params);
-        console.log(`📤 [Twilio] Template enviado para ${to} | SID: ${result.sid} | Template: ${contentSid}`);
-        return result;
-    }
-
-    /**
-     * Envia indicador de "digitando..." (Twilio não suporta nativamente)
+     * Envia indicador de "digitando..." para um número
+     * @param {string} phoneNumber
      */
     async sendTyping(phoneNumber) {
-        // Twilio WhatsApp API não suporta indicador de typing
+        // Twilio WhatsApp não expõe typing indicator para esta integração.
+        return { supported: false, phoneNumber };
     }
 
     /**
-     * Para o indicador de "digitando..." (Twilio não suporta nativamente)
+     * Para o indicador de "digitando..."
+     * @param {string} phoneNumber
      */
     async stopTyping(phoneNumber) {
-        // Twilio WhatsApp API não suporta indicador de typing
+        // No-op: Twilio WhatsApp não expõe typing indicator para esta integração.
+        return { supported: false, phoneNumber };
     }
 
     /**
-     * Verifica o status da conexão com a API Twilio
+     * Verifica o status da conexão com a API
+     * @returns {object} Status da conexão
      */
     async getStatus() {
-        if (!this.client) {
-            return { connected: false, message: 'Twilio não configurado. Verifique TWILIO_ACCOUNT_SID e TWILIO_AUTH_TOKEN no .env' };
+        if (!this.isConfigured()) {
+            return {
+                connected: false,
+                configured: false,
+                message: 'Twilio não configurado. Defina TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN e TWILIO_PHONE_NUMBER.'
+            };
         }
-        try {
-            const account = await this.client.api.accounts(process.env.TWILIO_ACCOUNT_SID).fetch();
-            return { connected: true, message: `Twilio conectado — Conta: ${account.friendlyName}, Status: ${account.status}` };
-        } catch (err) {
-            return { connected: false, message: `Erro ao verificar Twilio: ${err.message}` };
-        }
+
+        return {
+            connected: true,
+            configured: true,
+            provider: 'twilio',
+            phoneNumber: this.normalizePhoneNumber(this.phoneNumber),
+        };
     }
 }
 

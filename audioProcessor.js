@@ -81,10 +81,47 @@ humanizada, empática e acolhedora.
     `.trim();
 }
 
+function downloadFile(sourceUrl, destinationPath, requestOptions = {}, redirectCount = 0) {
+    return new Promise((resolve, reject) => {
+        if (redirectCount > 5) {
+            reject(new Error('Falha ao baixar áudio: redirects em excesso'));
+            return;
+        }
+
+        const client = sourceUrl.startsWith('https') ? https : http;
+        const request = client.get(sourceUrl, requestOptions, (res) => {
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                res.resume();
+                downloadFile(res.headers.location, destinationPath, requestOptions, redirectCount + 1)
+                    .then(resolve)
+                    .catch(reject);
+                return;
+            }
+
+            if (res.statusCode !== 200) {
+                res.resume();
+                reject(new Error(`Falha ao baixar áudio: HTTP ${res.statusCode}`));
+                return;
+            }
+
+            const fileStream = fs.createWriteStream(destinationPath);
+            res.pipe(fileStream);
+            fileStream.on('finish', () => {
+                fileStream.close(resolve);
+            });
+            fileStream.on('error', (error) => {
+                fs.unlink(destinationPath, () => reject(error));
+            });
+        });
+
+        request.on('error', reject);
+    });
+}
+
 /**
  * Baixa áudio de uma URL (Z-API) e transcreve via Whisper.
  */
-async function transcribeAudioFromUrl(audioUrl, phoneNumber, outputDir = './temp_audio') {
+async function transcribeAudioFromUrl(audioUrl, phoneNumber, outputDir = './temp_audio', requestOptions = {}) {
     if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
     }
@@ -94,30 +131,7 @@ async function transcribeAudioFromUrl(audioUrl, phoneNumber, outputDir = './temp
     const audioPath = path.join(outputDir, `audio_${Date.now()}.ogg`);
 
     // Baixar áudio da URL
-    await new Promise((resolve, reject) => {
-        const client = audioUrl.startsWith('https') ? https : http;
-        client.get(audioUrl, (res) => {
-            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                // Seguir redirect
-                const redirectClient = res.headers.location.startsWith('https') ? https : http;
-                redirectClient.get(res.headers.location, (redirectRes) => {
-                    const fileStream = fs.createWriteStream(audioPath);
-                    redirectRes.pipe(fileStream);
-                    fileStream.on('finish', () => { fileStream.close(); resolve(); });
-                    fileStream.on('error', reject);
-                }).on('error', reject);
-                return;
-            }
-            if (res.statusCode !== 200) {
-                reject(new Error(`Falha ao baixar áudio: HTTP ${res.statusCode}`));
-                return;
-            }
-            const fileStream = fs.createWriteStream(audioPath);
-            res.pipe(fileStream);
-            fileStream.on('finish', () => { fileStream.close(); resolve(); });
-            fileStream.on('error', reject);
-        }).on('error', reject);
-    });
+    await downloadFile(audioUrl, audioPath, requestOptions);
 
     try {
         const start = Date.now();
