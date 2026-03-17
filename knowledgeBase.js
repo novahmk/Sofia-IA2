@@ -59,57 +59,57 @@ class KnowledgeBase {
             console.warn(`⚠️ Erro ao carregar KB: ${error.message}`);
         }
 
-        // Documentos padrão sobre Quality Hair
+        // Documentos padrão sobre Quality Hair — Terapia Capilar & Mesoterapia
         return [
             {
                 id: 'clinic_about',
                 title: 'Sobre a Quality Hair',
-                content: 'A Quality Hair é uma clínica especializada em transplante capilar com foco em tratamento humanizado. Nossa missão é entregar resultados reais e naturais, transformando vidas através de procedimentos de qualidade. Temos uma equipe de especialistas com experiência em todas as técnicas de transplante capilar modernas.'
+                content: 'A Quality Hair é uma clínica especializada em Terapia Capilar com foco em tratamento humanizado. Localizada na Vila Mariana, próximo ao metrô Paraíso, São Paulo. Nossa missão é entregar resultados reais e naturais, transformando vidas através de procedimentos de qualidade em saúde capilar. Temos uma equipe de especialistas com experiência em Mesoterapia Capilar e tratamentos capilares avançados.'
             },
             {
-                id: 'consultation',
-                title: 'Consulta Inicial',
-                content: 'A consulta inicial custa R$ 700,00 (agora de graça em promoção). Inclui: Avaliação completa, Planejamento cirúrgico exclusivo, Exame de imagem (tricoscopia digital), Diagnóstico preciso do grau de calvície (Norwood), Discussão de opções de tratamento. Duração: aproximadamente 1-2 horas.'
+                id: 'mesotherapy_what',
+                title: 'O que é Mesoterapia Capilar',
+                content: 'A Mesoterapia Capilar consiste em microinjeções de um "coquetel" de ativos (vitaminas, biotina, minoxidil, aminoácidos, minerais e fatores de crescimento) direto na derme do couro cabeludo, a uma profundidade de 2 a 4mm. Como os ativos vão direto na raiz, o resultado é muito superior a qualquer loção de passar em casa. A técnica é consagrada desde 1952 e é uma das formas mais eficazes de combater a queda capilar sem cirurgia.'
             },
             {
-                id: 'surgery_prices',
-                title: 'Preços da Cirurgia',
-                content: 'Cirurgia de Transplante Capilar: R$ 12.648,00 em até 24x no cartão de crédito com juros 0% ou R$ 10.000,00 à vista (desconto de R$ 2.648,00) para Pix ou dinheiro. O investimento depende da quantidade de enxertos necessários e será definido no planejamento cirúrgico exclusivo.'
+                id: 'mesotherapy_pain',
+                title: 'Dor e Conforto na Mesoterapia',
+                content: 'A dor da Mesoterapia é mínima. Usamos agulhas ultrafinas, tão finas quanto um fio de cabelo. Se o paciente preferir, aplicamos um anestésico tópico antes para garantir total conforto durante o procedimento. O resultado vale muito a pena.'
             },
             {
-                id: 'surgery_included',
-                title: 'O que Está Incluído na Cirurgia',
-                content: 'Cada cirurgia inclui: Procedimento de transplante capilar com técnica FUE, Anestesia local, Medicações pós-operatório, Acompanhamento completo por 12 meses, Consultas de acompanhamento (1ª semana, 1º mês, 3º mês, 6º mês, 12º mês), Suporte 24/7 para dúvidas pós-operatório.'
+                id: 'mesotherapy_results',
+                title: 'Resultados da Mesoterapia',
+                content: 'A redução da queda capilar geralmente é percebida já na 2ª ou 3ª sessão de Mesoterapia. O crescimento de novos fios costuma aparecer entre 6 a 8 semanas após o início do tratamento. Os benefícios incluem: nutrição profunda do couro cabeludo, aumento da densidade capilar (fios mais grossos), estímulo da circulação sanguínea local e combate à queda genética ou por estresse.'
             },
             {
-                id: 'results_timeline',
-                title: 'Cronograma de Resultados',
-                content: 'Primeira semana: Inchaço e repouso. Primeiras semanas: Os cabelos implantados caem (normal). 3º mês: Os fios novos começam a crescer. 6º mês: 50-60% dos resultados visíveis. 9º mês: 80-90% dos resultados. 12º mês: Resultado final completo. O acompanhamento de 12 meses garante que você veja o resultado total.'
+                id: 'mesotherapy_sessions',
+                title: 'Sessões e Duração do Tratamento',
+                content: 'Cada sessão de Mesoterapia dura entre 30 a 60 minutos. O protocolo padrão é de 6 sessões na fase intensiva. A quantidade de sessões é pensada para respeitar o ciclo de crescimento do cabelo — é um processo biológico que leva tempo para reativar os folículos e fortalecer os fios. É como regar uma planta: precisa de constância para florescer.'
             },
             {
-                id: 'techniques',
-                title: 'Técnicas Disponíveis',
-                content: 'Nossa clínica trabalha com: FUE (Follicular Unit Extraction) - técnica mais moderna, menos invasiva, sem cicatriz linear. DHI (Direct Hair Implantation) - implantação direta com precisão. Temos especialistas em ambas as técnicas e recomendamos a melhor para cada caso.'
+                id: 'mesotherapy_vs_transplant',
+                title: 'Mesoterapia vs Transplante Capilar',
+                content: 'Muitas pessoas acham que a única solução para queda capilar é o transplante, mas com a Mesoterapia Capilar conseguimos reativar folículos que estão "dormindo" e engrossar os fios que ficaram finos. Muitas vezes, recuperamos o volume sem precisar de cirurgia. A Mesoterapia é um investimento na saúde contínua do cabelo que nutre folículos, fortalece fios existentes e estimula crescimento de novos, funcionando como cuidado preventivo e restaurador.'
             },
             {
-                id: 'candidacy',
-                title: 'Quem Pode Fazer Transplante',
-                content: 'O transplante capilar é indicado para: Alopecia androgenética (calvície hereditária), Queda de cabelo significativa (Norwood 2 ou mais), Cabelos e área doadora em bom estado, Expectativas realistas. Não indicado para: Alopecia total, Problemas de saúde graves não controlados. Uma consulta define sua candidatura.'
+                id: 'pricing',
+                title: 'Preços do Tratamento',
+                content: 'Avaliação Capilar: GRATUITA (vagas limitadas — apenas 15 por semana). Tratamento completo de 6 sessões de Mesoterapia Capilar personalizada: R$ 1.899,00 à vista ou 12x de R$ 159,90 no cartão. O valor inclui ativos de alta qualidade aplicados diretamente onde o cabelo precisa. O preço não deve ser mencionado logo de cara — o foco inicial é o valor da avaliação gratuita.'
             },
             {
-                id: 'post_care',
-                title: 'Cuidados Pós-Operatório',
-                content: 'Primeiras 2 semanas: Repouso relativo, evitar exercícios intensos, não lavar a região enxertada. Primeiras 4 semanas: Higiene cuidadosa, dormir com cabeça elevada. Mês 1-3: Evitar exposição solar excessiva, forçar cabelo ao pentear. Medicações: Minoxidil e Finasterida prescritos para potencializar resultados. Acompanhamento: Seguir consultas mensais.'
+                id: 'evaluation',
+                title: 'Avaliação Gratuita',
+                content: 'A avaliação gratuita é presencial na clínica Quality Hair, Vila Mariana, próximo ao metrô Paraíso, São Paulo. Inclui análise detalhada do couro cabeludo e dos fios, diagnóstico personalizado e recomendação de protocolo ideal. Temos apenas 15 vagas por semana para avaliação gratuita — gatilho de escassez real. O objetivo é que o paciente venha à clínica para entender o valor real do tratamento para o seu caso.'
             },
             {
-                id: 'side_effects',
-                title: 'Efeitos Colaterais e Riscos',
-                content: 'Efeitos colaterais comuns e temporários: Inchaço (3-5 dias), Formigamento (1-2 semanas), Coceira (normal, sinal de cicatrização), Coceira na área doadora. Riscos raros: Infecção (prevenida com antibióticos), Sangramentos leves, Irregularidades no crescimento. Todos são minimizados com técnicas modernas e acompanhamento.'
+                id: 'objections',
+                title: 'Tratamento de Objeções Comuns',
+                content: 'Objeções comuns incluem: Custo alto (reforçar parcelamento 12x R$ 159,90 e valor do tratamento completo), Medo de agulha (agulhas ultrafinas + anestésico tópico), Desconfiança (técnica consagrada desde 1952, ativos direto na raiz), Quero pensar (queda é progressiva, folículos podem morrer definitivamente), Resultados a longo prazo (investimento preventivo que evita necessidade futura de transplante).'
             },
             {
-                id: 'guarantee',
-                title: 'Garantias e Políticas',
-                content: 'Garantia de sobrevivência dos enxertos: Mínimo 90% de taxa de sobrevivência. Se houver falha de enxertos por erro técnico, oferecemos retoque gratuitamente. Satisfação com resultados: Se não estiver satisfeito em 6 meses, oferecemos ajustes. Política de cancelamento: Cancele até 7 dias antes sem custos.'
+                id: 'location',
+                title: 'Localização e Contato',
+                content: 'A clínica Quality Hair fica na Vila Mariana, próximo ao metrô Paraíso, São Paulo. Fácil acesso por transporte público. Atendimento presencial para avaliações e sessões de Mesoterapia Capilar.'
             }
         ];
     }
