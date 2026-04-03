@@ -480,6 +480,80 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // Endpoint genérico para qualquer sistema de mensagens (WhatsApp Business, Telegram, etc.)
+    if (req.method === 'POST' && req.url === '/api/messages') {
+        let body = '';
+
+        req.on('data', chunk => { body += chunk; });
+
+        req.on('end', async () => {
+            try {
+                let parsed;
+                try {
+                    parsed = JSON.parse(body);
+                } catch (jsonError) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'JSON inválido no corpo da requisição' }));
+                    return;
+                }
+
+                const { phone, message, mediaType } = parsed;
+
+                if (!phone || typeof phone !== 'string' || !phone.trim()) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'Campo "phone" é obrigatório' }));
+                    return;
+                }
+
+                if (!message || typeof message !== 'string' || !message.trim()) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'Campo "message" é obrigatório' }));
+                    return;
+                }
+
+                const cleanPhone = phone.trim().replace(/\D/g, '');
+
+                // Montar payload no mesmo formato que processIncomingMessage espera
+                const webhookData = {
+                    phone: cleanPhone,
+                    fromMe: false,
+                    isGroup: false,
+                    text: { message: message.trim(), body: message.trim() }
+                };
+
+                // Suporte a tipos de mídia opcionais (apenas texto por enquanto)
+                const resolvedMediaType = (mediaType || 'text').toLowerCase();
+                if (!['text'].includes(resolvedMediaType)) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: `Tipo de mídia "${resolvedMediaType}" não suportado neste endpoint. Use "text".` }));
+                    return;
+                }
+
+                console.log(`\n📩 /api/messages recebido de ${cleanPhone}: "${message.trim()}"`);
+
+                // Responder imediatamente antes de processar (não bloqueia o cliente)
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    message: 'Mensagem recebida e processada',
+                    phone: cleanPhone
+                }));
+
+                // Processar de forma assíncrona (igual ao webhook do Twilio)
+                processIncomingMessage(webhookData);
+
+            } catch (err) {
+                console.error('❌ Erro no endpoint /api/messages:', err.message);
+                if (!res.headersSent) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'Erro interno ao processar a mensagem' }));
+                }
+            }
+        });
+
+        return;
+    }
+
     // Rota não encontrada
     res.writeHead(404);
     res.end('Not Found');
@@ -512,6 +586,7 @@ async function start() {
     server.listen(WEBHOOK_PORT, () => {
         console.log(`\n🌐 Webhook server rodando na porta ${WEBHOOK_PORT}`);
         console.log(`   POST http://localhost:${WEBHOOK_PORT}/webhook`);
+        console.log(`   POST http://localhost:${WEBHOOK_PORT}/api/messages`);
         console.log(`   GET  http://localhost:${WEBHOOK_PORT}/health`);
         console.log(`   GET  http://localhost:${WEBHOOK_PORT}/metrics`);
         console.log(`   POST http://localhost:${WEBHOOK_PORT}/lgpd/delete`);
