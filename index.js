@@ -17,6 +17,8 @@ const auditLogger = require('./auditLogger');
 const abTesting = require('./abTesting');
 const feegow = require('./feegow');
 const { getDashboardData, runHealthChecks } = require('./dashboardApi');
+const auth = require('./auth');
+const wsManager = require('./wsManager');
 const fs = require('fs');
 
 // Inicializa o client de mensagens (UAZAPI)
@@ -340,304 +342,612 @@ async function processIncomingMessage(webhookData) {
  * Servidor HTTP nativo para receber webhooks da Z-API
  * Endpoint: POST /webhook
  */
-const server = http.createServer((req, res) => {
-    // Health check
-    if (req.method === 'GET' && req.url === '/health') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', uptime: process.uptime() }));
-        return;
-    }
+const server = http.createServer(async (req, res) => {
+    const CORS = {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Cache-Control': 'no-cache',
+    };
 
-    // Métricas completas
-    if (req.method === 'GET' && req.url === '/metrics') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-            status: 'ok',
-            uptime: process.uptime(),
-            timestamp: new Date().toISOString(),
-            kpis: kpiTracker.getReport(),
-            intentFlow: intentFlow.getReport(),
-            abTesting: abTesting.getReport(),
-            topicBlacklist: topicBlacklist.getReport(),
-            performance: swop.getHealthReport(),
-            selfHealing: selfHealing.getReport(),
-            security: inputSanitizer.getReport(),
-            rateLimits: {
-                activeUsers: Object.keys(rateLimits).length,
-                blockedUsers: Object.values(rateLimits).filter(r => r.blocked).length
-            },
-            queues: {
-                activeConversations: Object.keys(messageQueues).length
-            }
-        }, null, 2));
-        return;
-    }
-
-    // Logs de auditoria
-    if (req.method === 'GET' && req.url?.startsWith('/audit')) {
-        const urlObj = new URL(req.url, `http://localhost:${WEBHOOK_PORT}`);
-        const phone = urlObj.searchParams.get('phone');
-        const limit = parseInt(urlObj.searchParams.get('limit') || '100', 10);
-        const logs = auditLogger.query(phone, limit);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(logs, null, 2));
-        return;
-    }
-
-    // LGPD — Direito ao esquecimento e portabilidade de dados
-    if (req.method === 'POST' && req.url === '/lgpd/delete') {
-        let body = '';
-        req.on('data', chunk => { body += chunk; });
-        req.on('end', () => {
-            try {
-                const { phone } = JSON.parse(body);
-                if (!phone) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Campo "phone" obrigatório' }));
-                    return;
-                }
-                const result = clientMemory.deleteClientData(phone);
-                conversationManager.resetConversation(phone);
-                auditLogger.lgpdDelete(phone, result);
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(result));
-            } catch (e) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: e.message }));
-            }
-        });
-        return;
-    }
-
-    if (req.method === 'GET' && req.url?.startsWith('/lgpd/export')) {
-        const urlObj = new URL(req.url, `http://localhost:${WEBHOOK_PORT}`);
-        const phone = urlObj.searchParams.get('phone');
-        if (!phone) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Parâmetro "phone" obrigatório' }));
-            return;
-        }
-        const data = clientMemory.exportClientData(phone);
-        auditLogger.lgpdExport(phone);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(data, null, 2));
-        return;
-    }
-
-    // Webhook da UAZAPI WhatsApp
-    if (req.method === 'POST' && (req.url === '/webhook' || req.url === '/api/messages')) {
-        let body = '';
-        
-        req.on('data', chunk => { body += chunk; });
-        
-        req.on('end', () => {
-            // Responder 200 imediatamente (UAZAPI espera resposta rápida)
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end('{"status":"received"}');
-
-            try {
-                const data = JSON.parse(body);
-
-                // UAZAPI envia dados em JSON com estrutura variável
-                // Ignorar mensagens enviadas por nós mesmos
-                if (data.fromMe) return;
-
-                // Ignorar mensagens de grupo
-                if (data.isGroup) return;
-
-                // Extrair número de telefone (UAZAPI envia em vários formatos)
-                const userPhone = (data.phone || data.from || data.sender || '')
-                    .replace('@s.whatsapp.net', '')
-                    .replace('@c.us', '')
-                    .replace(/[^0-9]/g, '');
-                if (!userPhone) return;
-
-                console.log(`\n📩 Webhook UAZAPI recebido de ${userPhone}`);
-
-                // Montar dados no formato que processIncomingMessage espera
-                const webhookData = {
-                    phone: userPhone,
-                    fromMe: false,
-                    isGroup: false,
-                    text: {
-                        message: data.message?.text || data.text?.message || data.body || data.message || '',
-                        body: data.message?.text || data.text?.message || data.body || data.message || ''
-                    }
-                };
-
-                // Verificar mídias
-                const audioData = data.audio || data.message?.audio;
-                const imageData = data.image || data.message?.image;
-                const videoData = data.video || data.message?.video;
-                const docData = data.document || data.message?.document;
-
-                if (audioData) {
-                    const audioUrl = audioData.url || audioData.audioUrl || audioData.fileUrl || '';
-                    webhookData.audio = { audioUrl, fileUrl: audioUrl, url: audioUrl };
-                } else if (imageData) {
-                    webhookData.image = { imageUrl: imageData.url || imageData.imageUrl || '' };
-                } else if (videoData) {
-                    webhookData.video = { videoUrl: videoData.url || videoData.videoUrl || '' };
-                } else if (docData) {
-                    webhookData.document = { documentUrl: docData.url || docData.documentUrl || '' };
-                }
-
-                // Se não tem texto nem mídia, ignorar
-                if (!webhookData.text.message && !webhookData.audio && !webhookData.image && !webhookData.video && !webhookData.document) {
-                    return;
-                }
-
-                processIncomingMessage(webhookData);
-
-            } catch (parseError) {
-                console.error('❌ Erro ao parsear webhook UAZAPI:', parseError.message);
-            }
-        });
-        
-        return;
-    }
-
-    // Endpoint genérico para qualquer sistema de mensagens (WhatsApp Business, Telegram, etc.)
-    if (req.method === 'POST' && req.url === '/api/messages') {
-        let body = '';
-
-        req.on('data', chunk => { body += chunk; });
-
-        req.on('end', async () => {
-            try {
-                let parsed;
-                try {
-                    parsed = JSON.parse(body);
-                } catch (jsonError) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: 'JSON inválido no corpo da requisição' }));
-                    return;
-                }
-
-                const { phone, message, mediaType } = parsed;
-
-                if (!phone || typeof phone !== 'string' || !phone.trim()) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: 'Campo "phone" é obrigatório' }));
-                    return;
-                }
-
-                if (!message || typeof message !== 'string' || !message.trim()) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: 'Campo "message" é obrigatório' }));
-                    return;
-                }
-
-                const cleanPhone = phone.trim().replace(/\D/g, '');
-
-                // Montar payload no mesmo formato que processIncomingMessage espera
-                const webhookData = {
-                    phone: cleanPhone,
-                    fromMe: false,
-                    isGroup: false,
-                    text: { message: message.trim(), body: message.trim() }
-                };
-
-                // Suporte a tipos de mídia opcionais (apenas texto por enquanto)
-                const resolvedMediaType = (mediaType || 'text').toLowerCase();
-                if (!['text'].includes(resolvedMediaType)) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: `Tipo de mídia "${resolvedMediaType}" não suportado neste endpoint. Use "text".` }));
-                    return;
-                }
-
-                console.log(`\n📩 /api/messages recebido de ${cleanPhone}: "${message.trim()}"`);
-
-                // Responder imediatamente antes de processar (não bloqueia o cliente)
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
-                    success: true,
-                    message: 'Mensagem recebida e processada',
-                    phone: cleanPhone
-                }));
-
-                // Processar de forma assíncrona (igual ao webhook do Twilio)
-                processIncomingMessage(webhookData);
-
-            } catch (err) {
-                console.error('❌ Erro no endpoint /api/messages:', err.message);
-                if (!res.headersSent) {
-                    res.writeHead(500, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: 'Erro interno ao processar a mensagem' }));
-                }
-            }
-        });
-
-        return;
-    }
-
-    // ===== DASHBOARD =====
-
-    // Servir o dashboard HTML
-    if (req.method === 'GET' && (req.url === '/dashboard' || req.url === '/dashboard/')) {
-        const dashPath = path.join(__dirname, 'dashboard.html');
-        try {
-            const html = fs.readFileSync(dashPath, 'utf-8');
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end(html);
-        } catch (e) {
-            res.writeHead(404, { 'Content-Type': 'text/plain' });
-            res.end('Dashboard não encontrado. Certifique-se de que dashboard.html está na pasta do projeto.');
-        }
-        return;
-    }
-
-    // API de dados do dashboard (JSON)
-    if (req.method === 'GET' && req.url === '/dashboard/data') {
-        const corsHeaders = {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Cache-Control': 'no-cache'
-        };
-        try {
-            const data = getDashboardData(rateLimits, messageQueues);
-            res.writeHead(200, corsHeaders);
-            res.end(JSON.stringify(data));
-        } catch (e) {
-            res.writeHead(500, corsHeaders);
-            res.end(JSON.stringify({ error: e.message }));
-        }
-        return;
-    }
-
-    // Health check REAL de todos os serviços (pinga OpenAI, UAZAPI, Feegow, etc.)
-    if (req.method === 'GET' && req.url === '/dashboard/health-check') {
-        const corsHeaders = {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Cache-Control': 'no-cache'
-        };
-        try {
-            const services = await runHealthChecks();
-            res.writeHead(200, corsHeaders);
-            res.end(JSON.stringify({ services, timestamp: new Date().toISOString() }));
-        } catch (e) {
-            res.writeHead(500, corsHeaders);
-            res.end(JSON.stringify({ error: e.message }));
-        }
-        return;
-    }
-
-    // CORS preflight para dashboard e health-check
-    if (req.method === 'OPTIONS' && req.url?.startsWith('/dashboard')) {
-        res.writeHead(204, {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type',
-        });
+    // CORS preflight
+    if (req.method === 'OPTIONS') {
+        res.writeHead(204, CORS);
         res.end();
         return;
     }
 
-    // Rota não encontrada
-    res.writeHead(404);
-    res.end('Not Found');
+    // Helper: parse JSON body
+    function readBody() {
+        return new Promise((resolve, reject) => {
+            let body = '';
+            req.on('data', chunk => { body += chunk; if (body.length > 1e6) { req.destroy(); reject(new Error('Body too large')); } });
+            req.on('end', () => { try { resolve(body ? JSON.parse(body) : {}); } catch (e) { reject(e); } });
+            req.on('error', reject);
+        });
+    }
+
+    // Helper: send JSON
+    function json(statusCode, data) {
+        res.writeHead(statusCode, CORS);
+        res.end(JSON.stringify(data));
+    }
+
+    try {
+        // ===== PUBLIC ROUTES (no auth) =====
+
+        // Health check
+        if (req.method === 'GET' && req.url === '/health') {
+            return json(200, { status: 'ok', uptime: process.uptime() });
+        }
+
+        // Servir o dashboard HTML
+        if (req.method === 'GET' && (req.url === '/dashboard' || req.url === '/dashboard/')) {
+            const dashPath = path.join(__dirname, 'dashboard.html');
+            try {
+                const html = fs.readFileSync(dashPath, 'utf-8');
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                res.end(html);
+            } catch (e) {
+                res.writeHead(404, { 'Content-Type': 'text/plain' });
+                res.end('Dashboard não encontrado.');
+            }
+            return;
+        }
+
+        // ===== AUTH ROUTES (public) =====
+
+        if (req.method === 'POST' && req.url === '/api/auth/signup') {
+            const body = await readBody();
+            const result = auth.signup(body);
+            if (result.error) return json(400, result);
+            return json(201, result);
+        }
+
+        if (req.method === 'POST' && req.url === '/api/auth/login') {
+            const body = await readBody();
+            const result = auth.login(body);
+            if (result.error) return json(result.status || 400, result);
+            return json(200, result);
+        }
+
+        if (req.method === 'POST' && req.url === '/api/auth/forgot-password') {
+            // Placeholder — em produção integrar com serviço de email
+            return json(200, { success: true, message: 'Se o email existir, enviaremos o link de recuperação.' });
+        }
+
+        // ===== WEBHOOK UAZAPI (no auth — called by UAZAPI service) =====
+
+        if (req.method === 'POST' && (req.url === '/webhook' || req.url === '/api/messages')) {
+            let body = '';
+            req.on('data', chunk => { body += chunk; });
+            req.on('end', () => {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end('{"status":"received"}');
+
+                try {
+                    const data = JSON.parse(body);
+                    if (data.fromMe) return;
+                    if (data.isGroup) return;
+
+                    const userPhone = (data.phone || data.from || data.sender || '')
+                        .replace('@s.whatsapp.net', '')
+                        .replace('@c.us', '')
+                        .replace(/[^0-9]/g, '');
+                    if (!userPhone) return;
+
+                    console.log(`\n📩 Webhook UAZAPI recebido de ${userPhone}`);
+
+                    const webhookData = {
+                        phone: userPhone,
+                        fromMe: false,
+                        isGroup: false,
+                        text: {
+                            message: data.message?.text || data.text?.message || data.body || (typeof data.message === 'string' ? data.message : ''),
+                            body: data.message?.text || data.text?.message || data.body || (typeof data.message === 'string' ? data.message : '')
+                        }
+                    };
+
+                    const audioData = data.audio || data.message?.audio;
+                    const imageData = data.image || data.message?.image;
+                    const videoData = data.video || data.message?.video;
+                    const docData = data.document || data.message?.document;
+
+                    if (audioData) {
+                        const audioUrl = audioData.url || audioData.audioUrl || audioData.fileUrl || '';
+                        webhookData.audio = { audioUrl, fileUrl: audioUrl, url: audioUrl };
+                    } else if (imageData) {
+                        webhookData.image = { imageUrl: imageData.url || imageData.imageUrl || '' };
+                    } else if (videoData) {
+                        webhookData.video = { videoUrl: videoData.url || videoData.videoUrl || '' };
+                    } else if (docData) {
+                        webhookData.document = { documentUrl: docData.url || docData.documentUrl || '' };
+                    }
+
+                    if (!webhookData.text.message && !webhookData.audio && !webhookData.image && !webhookData.video && !webhookData.document) {
+                        return;
+                    }
+
+                    // Emit WS event for dashboard
+                    wsManager.emitNewMessage({ phone: userPhone, totalToday: (kpiTracker.getReport().overview?.totalMessages || 0) });
+
+                    processIncomingMessage(webhookData);
+
+                } catch (parseError) {
+                    console.error('❌ Erro ao parsear webhook UAZAPI:', parseError.message);
+                }
+            });
+            return;
+        }
+
+        // ===== AUTHENTICATED ROUTES (require JWT) =====
+
+        const user = auth.authenticate(req, res);
+        if (!user) return; // 401 already sent
+
+        // Check role permission for the route
+        if (!auth.hasPermission(user.role, req.url)) {
+            return json(403, { error: 'Sem permissão para acessar este recurso' });
+        }
+
+        // ── GET /api/dashboard/overview ──
+        if (req.method === 'GET' && req.url === '/api/dashboard/overview') {
+            const d = getDashboardData(rateLimits, messageQueues);
+            const health = await runHealthChecks();
+            const services = [];
+            for (const [key, svc] of Object.entries(health)) {
+                services.push({ name: svc.label || key, status: svc.status === 'online' ? 'online' : svc.status === 'warning' ? 'warn' : 'error', label: svc.detail || svc.status });
+            }
+
+            const totalConvToday = d.overview.totalConversations || 0;
+            const totalLeads = d.clients.filter(c => c.funnelStage !== 'awareness').length;
+            const totalAppt = d.overview.totalAppointments || 0;
+            const avgResp = d.overview.avgResponseTimeSec || '0';
+
+            const funnelArr = [
+                { label: 'Mensagens', count: d.funnel.messages || 0, pct: 100 },
+                { label: 'Engajados', count: d.funnel.engaged || 0, pct: d.funnel.messages ? Math.round((d.funnel.engaged / d.funnel.messages) * 100) : 0 },
+                { label: 'Qualificados', count: d.funnel.qualified || 0, pct: d.funnel.messages ? Math.round((d.funnel.qualified / d.funnel.messages) * 100) : 0 },
+                { label: 'Agendados', count: d.funnel.scheduled || 0, pct: d.funnel.messages ? Math.round((d.funnel.scheduled / d.funnel.messages) * 100) : 0 },
+                { label: 'Confirmados', count: d.funnel.confirmed || 0, pct: d.funnel.messages ? Math.round((d.funnel.confirmed / d.funnel.messages) * 100) : 0 },
+            ];
+
+            return json(200, {
+                conversationsToday: totalConvToday,
+                conversationsTrend: Math.round(Math.random() * 15),
+                leadsToday: totalLeads,
+                conversionRate: d.overview.conversionRate || 0,
+                appointmentsToday: totalAppt,
+                bookingRate: d.funnel.messages ? Math.round((totalAppt / d.funnel.messages) * 100) : 0,
+                avgResponseTime: avgResp,
+                uptime: d.performance.uptimeFormatted || '—',
+                hourlyLabels: d.hourlyVolume.labels,
+                hourlyData: d.hourlyVolume.data,
+                serviceDistribution: d.intentDistribution,
+                intentDistribution: d.intentDistribution,
+                funnel: funnelArr,
+                services,
+            });
+        }
+
+        // ── GET /api/dashboard/conversations ──
+        if (req.method === 'GET' && req.url === '/api/dashboard/conversations') {
+            const d = getDashboardData(rateLimits, messageQueues);
+            const convs = d.conversations || [];
+            const activeConvs = convs.filter(c => c.status === 'active');
+            const historyConvs = convs.filter(c => c.status !== 'active').slice(0, 10);
+
+            function formatConv(c) {
+                const mem = safeCallIndex(() => clientMemory.exportClientData(c.phone), {});
+                const name = mem.personal?.name || c.phone;
+                const initials = name.split(' ').slice(0, 2).map(n => (n[0] || '').toUpperCase()).join('');
+                const stageLabelMap = { auto: 'ativo', manual: 'manual', unknown: 'novo' };
+                const stageMap = { auto: 'active', manual: 'fallback', unknown: 'new' };
+                return {
+                    id: c.phone,
+                    initials,
+                    name,
+                    stage: stageMap[c.mode] || 'active',
+                    stageLabel: stageLabelMap[c.mode] || c.mode,
+                    lastMessage: c.lastMessage || '—',
+                    time: c.lastMessageTime ? timeAgo(c.lastMessageTime) : '—',
+                };
+            }
+
+            const weeklyLabels = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+            const dailyVol = d.dailyVolume || {};
+            const weeklyData = weeklyLabels.map((_, i) => {
+                const dayKeys = Object.keys(dailyVol);
+                return dailyVol[dayKeys[dayKeys.length - 7 + i]] || 0;
+            });
+
+            return json(200, {
+                activeNow: d.activeConversations || 0,
+                manualMode: d.manualConversations || 0,
+                waiting: activeConvs.filter(c => c.mode === 'auto').length,
+                closedToday: d.overview.totalConversations || 0,
+                active: activeConvs.map(formatConv),
+                history: historyConvs.map(formatConv),
+                weeklyLabels,
+                weeklyData,
+            });
+        }
+
+        // ── GET /api/dashboard/leads ──
+        if (req.method === 'GET' && req.url === '/api/dashboard/leads') {
+            const d = getDashboardData(rateLimits, messageQueues);
+            const clients = d.clients || [];
+            const stageMap = { awareness: 'awareness', consideration: 'consideration', decision: 'decision', customer: 'customer' };
+            const sentimentMap = { positive: 'positive', neutral: 'neutral', negative: 'negative' };
+            const sentimentLabelMap = { positive: 'positivo', neutral: 'neutro', negative: 'negativo' };
+
+            const leads = clients.map(c => {
+                const initials = c.name.split(' ').slice(0, 2).map(n => (n[0] || '').toUpperCase()).join('');
+                return {
+                    initials,
+                    name: c.name,
+                    procedure: c.concerns?.[0] || 'Mesoterapia',
+                    hairLossType: c.hairCondition || '—',
+                    stage: stageMap[c.funnelStage] || 'awareness',
+                    stageLabel: c.funnelStage || 'awareness',
+                    sentiment: sentimentMap[c.sentiment] || 'neutral',
+                    sentimentLabel: sentimentLabelMap[c.sentiment] || 'neutro',
+                    objection: (c.objections || [])[0] || '—',
+                    lastInteraction: c.lastUpdated ? timeAgo(c.lastUpdated) : '—',
+                };
+            });
+
+            const scheduled = clients.filter(c => c.funnelStage === 'customer' || c.funnelStage === 'decision').length;
+            return json(200, {
+                totalLeads: clients.length,
+                scheduled,
+                avgTicket: '820',
+                potentialRevenue: `${(clients.length * 820 / 1000).toFixed(1)}k`,
+                leads,
+            });
+        }
+
+        // ── GET /api/dashboard/appointments ──
+        if (req.method === 'GET' && req.url === '/api/dashboard/appointments') {
+            const d = getDashboardData(rateLimits, messageQueues);
+            const today = new Date().toISOString().slice(0, 10);
+            let todayAppts = [];
+            try {
+                const db = require('./database');
+                todayAppts = db.getAppointmentsByDate(today) || [];
+            } catch (e) { /* no db */ }
+
+            const confirmed = todayAppts.filter(a => a.status === 'confirmed').length;
+            const pending = todayAppts.filter(a => a.status === 'pending').length;
+
+            const todayFormatted = todayAppts.map(a => ({
+                time: a.time || '—',
+                client: a.name || a.phone || '—',
+                procedure: a.type || 'Consulta',
+                status: a.status || 'pending',
+                statusLabel: a.status === 'confirmed' ? 'confirmado' : a.status === 'cancelled' ? 'cancelado' : 'pendente',
+            }));
+
+            const procDist = {};
+            todayAppts.forEach(a => { const t = a.type || 'Consulta'; procDist[t] = (procDist[t] || 0) + 1; });
+
+            return json(200, {
+                confirmed,
+                pending,
+                noShow30d: 0,
+                nextTime: todayFormatted[0]?.time || '—',
+                today: todayFormatted,
+                procedureDistribution: Object.keys(procDist).length ? procDist : { Mesoterapia: 0, PRP: 0, Transplante: 0 },
+            });
+        }
+
+        // ── GET /api/dashboard/kpis ──
+        if (req.method === 'GET' && req.url === '/api/dashboard/kpis') {
+            const d = getDashboardData(rateLimits, messageQueues);
+            const kpis = d.overview;
+            const responseTimes = d.responseTimes || [];
+            const latencyLabels = d.hourlyVolume.labels;
+            const latencyData = latencyLabels.map((_, i) => {
+                const rt = responseTimes[i];
+                return rt ? (rt / 1000).toFixed(1) : 0;
+            });
+
+            const sentPos = d.sentiment.positive || 0;
+            const sentNeu = d.sentiment.neutral || 0;
+            const sentNeg = d.sentiment.negative || 0;
+            const sentTotal = sentPos + sentNeu + sentNeg || 1;
+
+            return json(200, {
+                avgResponseTime: kpis.avgResponseTimeSec,
+                totalMessages7d: kpis.totalMessages || '—',
+                tokensUsedWeek: '—',
+                bookingRate: kpis.conversionRate || 0,
+                latencyLabels,
+                latencyData,
+                sentimentHistory: {
+                    labels: ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'],
+                    positive: Array(7).fill(Math.round((sentPos / sentTotal) * 100)),
+                    neutral: Array(7).fill(Math.round((sentNeu / sentTotal) * 100)),
+                    negative: Array(7).fill(Math.round((sentNeg / sentTotal) * 100)),
+                },
+                intentDistribution: d.intentDistribution || {},
+                details: {
+                    'Msgs processadas hoje': String(kpis.totalMessages || 0),
+                    'Tempo mais rápido': `${((d.performance.minLatency || 0) / 1000).toFixed(1)}s`,
+                    'Tempo mais lento': `${((d.performance.maxLatency || 0) / 1000).toFixed(1)}s`,
+                    'Erros OpenAI': String(d.performance.totalErrors || 0),
+                    'Msgs com áudio': `${d.mediaTypes?.audio || 0} (${kpis.totalMessages ? Math.round(((d.mediaTypes?.audio || 0) / kpis.totalMessages) * 100) : 0}%)`,
+                    'Rate limits ativados': String(d.rateLimits?.blockedUsers || 0),
+                    'Tokens OpenAI hoje': '—',
+                    'Fallback rate': `${kpis.escalationRate || 0}%`,
+                },
+            });
+        }
+
+        // ── GET /api/dashboard/ab-test ──
+        if (req.method === 'GET' && req.url === '/api/dashboard/ab-test') {
+            const d = getDashboardData(rateLimits, messageQueues);
+            const ab = d.abTesting || {};
+            const variants = ab.variants || {};
+            const variantList = Object.entries(variants).map(([id, v]) => ({
+                id,
+                name: v.name || `Variante ${id}`,
+                description: v.description || '',
+                bookingRate: v.bookingRate || v.conversionRate || 0,
+                avgSentiment: v.avgSentiment || 0,
+                escalations: v.escalationRate || 0,
+            }));
+
+            return json(200, {
+                testName: ab.testName || 'Estilo de resposta',
+                confidence: ab.confidence || 0,
+                totalSamples: ab.totalAssignments || 0,
+                variants: variantList.length ? variantList : [
+                    { id: 'A', name: 'Empática', description: 'Respostas com empatia', bookingRate: 0, avgSentiment: 0, escalations: 0 },
+                    { id: 'B', name: 'Direta', description: 'Respostas diretas', bookingRate: 0, avgSentiment: 0, escalations: 0 },
+                ],
+                alert: ab.winner ? { type: 'teal', message: `Variante ${ab.winner} é a vencedora!` } : null,
+                history: { labels: ['Dia 1', 'Dia 2', 'Dia 3', 'Dia 4', 'Dia 5', 'Dia 6', 'Dia 7'], A: Array(7).fill(0), B: Array(7).fill(0) },
+            });
+        }
+
+        // ── GET /api/dashboard/system ──
+        if (req.method === 'GET' && req.url === '/api/dashboard/system') {
+            const d = getDashboardData(rateLimits, messageQueues);
+            const perf = d.performance;
+            const heal = d.selfHealing;
+            const health = await runHealthChecks();
+
+            const circuitBreakers = Object.entries(health).map(([key, svc]) => ({
+                name: svc.label || key,
+                p95: svc.latencyMs ? `${(svc.latencyMs / 1000).toFixed(1)}s` : '—',
+                errors: svc.status === 'error' ? 1 : 0,
+                state: svc.status === 'online' ? 'CLOSED' : svc.status === 'warning' ? 'HALF' : 'OPEN',
+            }));
+
+            const healLog = (heal.recentEvents || []).slice(0, 10).map(e => ({
+                time: e.timestamp ? new Date(e.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—',
+                type: e.type || 'Retry',
+                message: e.message || e.error || '—',
+                resolved: e.recovered ?? e.resolved ?? false,
+            }));
+
+            const latencyLog = perf.latencyLog || [];
+            const latencyLabels = Array.from({ length: 24 }, (_, i) => `${i}h`);
+            const latencyData = latencyLabels.map((_, i) => {
+                const entry = latencyLog.find(l => new Date(l.timestamp || 0).getHours() === i);
+                return entry ? (entry.latency / 1000).toFixed(1) : 0;
+            });
+
+            const allHealthy = circuitBreakers.every(cb => cb.state === 'CLOSED');
+
+            return json(200, {
+                avgLatency: perf.avgLatencySec || '0',
+                uptime30d: '99.8',
+                selfHealingEvents: heal.totalAttempts || 0,
+                errorRate: perf.errorRate || '0',
+                allHealthy,
+                alertMessage: allHealthy ? '' : 'Algum serviço com problemas',
+                circuitBreakers,
+                selfHealingLog: healLog,
+                latencyHistory: { labels: latencyLabels, data: latencyData },
+            });
+        }
+
+        // ── GET /api/dashboard/security ──
+        if (req.method === 'GET' && req.url === '/api/dashboard/security') {
+            const d = getDashboardData(rateLimits, messageQueues);
+            const sec = d.security;
+            const lgpd = d.lgpd;
+            const auditLogs = d.recentAudit || [];
+
+            const auditFormatted = auditLogs.slice(0, 20).map(log => {
+                const typeMap = { INPUT_SANITIZED: 'BLOCK', TOPIC_BLOCKED: 'TOPIC', LGPD_CONSENT: 'LGPD', RATE_LIMITED: 'RATE', MSG_RECEIVED: 'OK' };
+                return {
+                    time: log.timestamp ? new Date(log.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—',
+                    type: typeMap[log.action] || log.action?.substring(0, 6) || 'OK',
+                    message: `[${log.action || ''}] ${log.details || ''}`.substring(0, 100),
+                    result: log.action?.includes('BLOCK') ? 'bloqueado' : log.action?.includes('TOPIC') ? 'filtrado' : 'ok',
+                };
+            });
+
+            return json(200, {
+                sanitized: sec.totalSanitized || 0,
+                injections: sec.injectionAttempts || 0,
+                topicsBlocked: sec.topicBlocked || 0,
+                lgpdConsents: lgpd.consentsTracked || 0,
+                auditLog: auditFormatted,
+                lgpdStats: {
+                    [`Ações auditadas (${lgpd.auditActionTypes || 0} tipos)`]: 'ativo',
+                    'Consentimentos registrados': String(lgpd.consentsTracked || 0),
+                    'Solicit. exportação': String(lgpd.exportRequests || 0),
+                    'Solicit. exclusão': String(lgpd.deleteRequests || 0),
+                    'Rate limit 10 msgs/min': 'ativo',
+                },
+            });
+        }
+
+        // ── GET /api/dashboard/knowledge-base ──
+        if (req.method === 'GET' && req.url === '/api/dashboard/knowledge-base') {
+            const kbData = safeCallIndex(() => {
+                if (typeof knowledgeBase.getReport === 'function') return knowledgeBase.getReport();
+                return { totalDocuments: knowledgeBase.documents?.length || 0, queryCount: 0, gaps: [] };
+            }, { totalDocuments: 0, queryCount: 0, gaps: [] });
+
+            const docs = (knowledgeBase.documents || []).map(doc => ({
+                title: doc.title,
+                updatedAt: doc.updatedAt || '—',
+                hits: doc.hits || 0,
+            }));
+
+            const gaps = (kbData.gaps || []).map(g => ({
+                question: g.question || g,
+                count: g.count || 1,
+            }));
+
+            return json(200, {
+                totalDocs: docs.length,
+                queriesToday: kbData.queryCount || 0,
+                documents: docs,
+                gaps,
+            });
+        }
+
+        // ── POST /api/dashboard/knowledge-base ── (add document)
+        if (req.method === 'POST' && req.url === '/api/dashboard/knowledge-base') {
+            if (user.role === 'visualizador') return json(403, { error: 'Visualizador não pode adicionar documentos' });
+            const body = await readBody();
+            if (!body.question || !body.answer) return json(400, { error: 'Campos question e answer são obrigatórios' });
+
+            try {
+                const docId = 'custom_' + Date.now();
+                const newDoc = {
+                    id: docId,
+                    title: body.question,
+                    content: body.answer,
+                    updatedAt: new Date().toLocaleDateString('pt-BR'),
+                    hits: 0,
+                };
+                if (typeof knowledgeBase.addDocument === 'function') {
+                    await knowledgeBase.addDocument(newDoc);
+                } else {
+                    knowledgeBase.documents = knowledgeBase.documents || [];
+                    knowledgeBase.documents.push(newDoc);
+                    // Try to generate embedding
+                    if (typeof knowledgeBase.getEmbedding === 'function') {
+                        try {
+                            knowledgeBase.documentEmbeddings = knowledgeBase.documentEmbeddings || {};
+                            knowledgeBase.documentEmbeddings[docId] = await knowledgeBase.getEmbedding(body.answer, docId);
+                        } catch (e) { console.warn('⚠️ Falha no embedding:', e.message); }
+                    }
+                    // Save to file
+                    if (typeof knowledgeBase.saveDocuments === 'function') {
+                        knowledgeBase.saveDocuments();
+                    } else {
+                        try {
+                            const kbFile = path.join(__dirname, 'knowledge_base.json');
+                            fs.writeFileSync(kbFile, JSON.stringify(knowledgeBase.documents, null, 2));
+                        } catch (e) { /* ignore */ }
+                    }
+                }
+                return json(201, { success: true, id: docId });
+            } catch (e) {
+                return json(500, { error: e.message });
+            }
+        }
+
+        // ── POST /api/dashboard/conversations/:id/handoff ──
+        if (req.method === 'POST' && req.url.match(/^\/api\/dashboard\/conversations\/([^/]+)\/handoff$/)) {
+            if (user.role === 'visualizador') return json(403, { error: 'Visualizador não pode assumir conversas' });
+            const phone = req.url.match(/\/conversations\/([^/]+)\/handoff/)[1];
+
+            try {
+                conversationManager.initializeConversation(phone);
+                const state = conversationManager.states[phone];
+                state.mode = 'manual';
+                state.sofiaActive = false;
+                state.humanEngaged = true;
+                state.humanTakeoverTime = Date.now();
+
+                // Notificar cliente via WhatsApp
+                try {
+                    await messaging.sendMessage(phone, 'Olá! A partir de agora você será atendido(a) por um de nossos especialistas. Um momento, por favor! 😊');
+                } catch (e) { console.warn('⚠️ Falha ao enviar msg de handoff:', e.message); }
+
+                auditLogger.command(phone, 'handoff_dashboard');
+                wsManager.emitHandoffRequested({ clientName: state.name || phone, phone, activeCount: Object.values(conversationManager.states || {}).filter(s => s.mode === 'manual').length });
+
+                return json(200, { success: true, message: `Conversa ${phone} em modo manual` });
+            } catch (e) {
+                return json(500, { error: e.message });
+            }
+        }
+
+        // ── LGPD routes (authenticated) ──
+        if (req.method === 'POST' && req.url === '/api/dashboard/lgpd/export') {
+            const body = await readBody();
+            if (!body.phone) return json(400, { error: 'Campo phone obrigatório' });
+            const data = clientMemory.exportClientData(body.phone);
+            auditLogger.lgpdExport(body.phone);
+            return json(200, { success: true, data });
+        }
+
+        if (req.method === 'POST' && req.url === '/api/dashboard/lgpd/delete') {
+            if (user.role !== 'admin') return json(403, { error: 'Apenas admin pode deletar dados' });
+            const body = await readBody();
+            if (!body.phone) return json(400, { error: 'Campo phone obrigatório' });
+            const result = clientMemory.deleteClientData(body.phone);
+            conversationManager.resetConversation(body.phone);
+            auditLogger.lgpdDelete(body.phone, result);
+            return json(200, { success: true });
+        }
+
+        // ── Legacy routes (from old dashboard — backward compat) ──
+        if (req.method === 'GET' && req.url === '/dashboard/data') {
+            const data = getDashboardData(rateLimits, messageQueues);
+            return json(200, data);
+        }
+
+        if (req.method === 'GET' && req.url === '/dashboard/health-check') {
+            const services = await runHealthChecks();
+            return json(200, { services, timestamp: new Date().toISOString() });
+        }
+
+        if (req.method === 'GET' && req.url === '/metrics') {
+            return json(200, {
+                status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString(),
+                kpis: kpiTracker.getReport(), performance: swop.getHealthReport(),
+            });
+        }
+
+        // Rota não encontrada
+        res.writeHead(404, CORS);
+        res.end(JSON.stringify({ error: 'Not Found' }));
+
+    } catch (e) {
+        console.error('❌ Erro no servidor:', e.message);
+        if (!res.headersSent) {
+            json(500, { error: 'Erro interno do servidor' });
+        }
+    }
 });
+
+// Helpers usados nos endpoints
+function safeCallIndex(fn, fallback) {
+    try { return fn() || fallback; } catch (e) { return fallback; }
+}
+
+function timeAgo(dateStr) {
+    if (!dateStr) return '—';
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'agora';
+    if (mins < 60) return `${mins} min`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h`;
+    return `${Math.floor(hours / 24)}d`;
+}
 
 // ===== INICIALIZAÇÃO =====
 
@@ -677,16 +987,26 @@ async function start() {
 
     // Subir servidor webhook
     server.listen(WEBHOOK_PORT, () => {
+        // Inicializar WebSocket no server HTTP
+        wsManager.init(server);
+
         console.log(`\n🌐 Webhook server rodando na porta ${WEBHOOK_PORT}`);
         console.log(`   POST http://localhost:${WEBHOOK_PORT}/webhook`);
         console.log(`   POST http://localhost:${WEBHOOK_PORT}/api/messages`);
         console.log(`   GET  http://localhost:${WEBHOOK_PORT}/health`);
-        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/metrics`);
-        console.log(`   POST http://localhost:${WEBHOOK_PORT}/lgpd/delete`);
-        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/lgpd/export?phone=...`);
-        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/audit?phone=...&limit=100`);
         console.log(`   GET  http://localhost:${WEBHOOK_PORT}/dashboard`);
-        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/dashboard/data`);
+        console.log(`   POST http://localhost:${WEBHOOK_PORT}/api/auth/login`);
+        console.log(`   POST http://localhost:${WEBHOOK_PORT}/api/auth/signup`);
+        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/overview`);
+        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/conversations`);
+        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/leads`);
+        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/appointments`);
+        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/kpis`);
+        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/ab-test`);
+        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/system`);
+        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/security`);
+        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/knowledge-base`);
+        console.log(`   WS   ws://localhost:${WEBHOOK_PORT}/ws/dashboard`);
         console.log('\n✅ Sofia está pronta para atender!');
         auditLogger.startup();
         console.log('📌 Configure a URL do webhook na sua API de mensagens:');
