@@ -15,8 +15,11 @@ const intentFlow = require('./intentFlow');
 const topicBlacklist = require('./topicBlacklist');
 const auditLogger = require('./auditLogger');
 const abTesting = require('./abTesting');
+const feegow = require('./feegow');
+const { getDashboardData, runHealthChecks } = require('./dashboardApi');
+const fs = require('fs');
 
-// Inicializa o client de mensagens (implemente com sua API)
+// Inicializa o client de mensagens (UAZAPI)
 const messaging = new MessagingClient();
 
 // Lista de números de admin autorizados a usar comandos de controle
@@ -26,7 +29,7 @@ const ADMIN_PHONES = (process.env.ADMIN_PHONES || '')
     .filter(Boolean);
 
 // Porta do servidor webhook
-const WEBHOOK_PORT = parseInt(process.env.WEBHOOK_PORT || '3000', 10);
+const WEBHOOK_PORT = parseInt(process.env.PORT || process.env.WEBHOOK_PORT || '3000', 10);
 
 // Fila de mensagens por usuário para garantir ordem de processamento
 const messageQueues = {};
@@ -421,59 +424,73 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // Webhook do Twilio WhatsApp
-    if (req.method === 'POST' && req.url === '/webhook') {
+    // Webhook da UAZAPI WhatsApp
+    if (req.method === 'POST' && (req.url === '/webhook' || req.url === '/api/messages')) {
         let body = '';
         
         req.on('data', chunk => { body += chunk; });
         
         req.on('end', () => {
-            // Responder 200 imediatamente (Twilio exige resposta rápida)
-            res.writeHead(200, { 'Content-Type': 'text/xml' });
-            res.end('<Response></Response>');
+            // Responder 200 imediatamente (UAZAPI espera resposta rápida)
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end('{"status":"received"}');
 
             try {
-                // Twilio envia dados como application/x-www-form-urlencoded
-                const params = new URLSearchParams(body);
-                const from = params.get('From') || '';        // whatsapp:+5511999999999
-                const msgBody = params.get('Body') || '';
-                const numMedia = parseInt(params.get('NumMedia') || '0', 10);
-                const messageSid = params.get('MessageSid') || '';
+                const data = JSON.parse(body);
 
-                // Extrair número limpo (remover "whatsapp:" prefixo e "+")
-                const userPhone = from.replace('whatsapp:', '').replace('+', '');
+                // UAZAPI envia dados em JSON com estrutura variável
+                // Ignorar mensagens enviadas por nós mesmos
+                if (data.fromMe) return;
+
+                // Ignorar mensagens de grupo
+                if (data.isGroup) return;
+
+                // Extrair número de telefone (UAZAPI envia em vários formatos)
+                const userPhone = (data.phone || data.from || data.sender || '')
+                    .replace('@s.whatsapp.net', '')
+                    .replace('@c.us', '')
+                    .replace(/[^0-9]/g, '');
                 if (!userPhone) return;
 
-                console.log(`\n📩 Webhook Twilio recebido de ${userPhone} | SID: ${messageSid}`);
+                console.log(`\n📩 Webhook UAZAPI recebido de ${userPhone}`);
 
                 // Montar dados no formato que processIncomingMessage espera
                 const webhookData = {
                     phone: userPhone,
                     fromMe: false,
                     isGroup: false,
-                    text: { message: msgBody, body: msgBody }
+                    text: {
+                        message: data.message?.text || data.text?.message || data.body || data.message || '',
+                        body: data.message?.text || data.text?.message || data.body || data.message || ''
+                    }
                 };
 
-                // Verificar mídias (áudio, imagem, etc.)
-                if (numMedia > 0) {
-                    const mediaType = (params.get('MediaContentType0') || '').toLowerCase();
-                    const mediaUrl = params.get('MediaUrl0') || '';
+                // Verificar mídias
+                const audioData = data.audio || data.message?.audio;
+                const imageData = data.image || data.message?.image;
+                const videoData = data.video || data.message?.video;
+                const docData = data.document || data.message?.document;
 
-                    if (mediaType.startsWith('audio/')) {
-                        webhookData.audio = { audioUrl: mediaUrl, fileUrl: mediaUrl, url: mediaUrl };
-                    } else if (mediaType.startsWith('image/')) {
-                        webhookData.image = { imageUrl: mediaUrl };
-                    } else if (mediaType.startsWith('video/')) {
-                        webhookData.video = { videoUrl: mediaUrl };
-                    } else {
-                        webhookData.document = { documentUrl: mediaUrl };
-                    }
+                if (audioData) {
+                    const audioUrl = audioData.url || audioData.audioUrl || audioData.fileUrl || '';
+                    webhookData.audio = { audioUrl, fileUrl: audioUrl, url: audioUrl };
+                } else if (imageData) {
+                    webhookData.image = { imageUrl: imageData.url || imageData.imageUrl || '' };
+                } else if (videoData) {
+                    webhookData.video = { videoUrl: videoData.url || videoData.videoUrl || '' };
+                } else if (docData) {
+                    webhookData.document = { documentUrl: docData.url || docData.documentUrl || '' };
+                }
+
+                // Se não tem texto nem mídia, ignorar
+                if (!webhookData.text.message && !webhookData.audio && !webhookData.image && !webhookData.video && !webhookData.document) {
+                    return;
                 }
 
                 processIncomingMessage(webhookData);
 
             } catch (parseError) {
-                console.error('❌ Erro ao parsear webhook Twilio:', parseError.message);
+                console.error('❌ Erro ao parsear webhook UAZAPI:', parseError.message);
             }
         });
         
@@ -554,6 +571,69 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // ===== DASHBOARD =====
+
+    // Servir o dashboard HTML
+    if (req.method === 'GET' && (req.url === '/dashboard' || req.url === '/dashboard/')) {
+        const dashPath = path.join(__dirname, 'dashboard.html');
+        try {
+            const html = fs.readFileSync(dashPath, 'utf-8');
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(html);
+        } catch (e) {
+            res.writeHead(404, { 'Content-Type': 'text/plain' });
+            res.end('Dashboard não encontrado. Certifique-se de que dashboard.html está na pasta do projeto.');
+        }
+        return;
+    }
+
+    // API de dados do dashboard (JSON)
+    if (req.method === 'GET' && req.url === '/dashboard/data') {
+        const corsHeaders = {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'no-cache'
+        };
+        try {
+            const data = getDashboardData(rateLimits, messageQueues);
+            res.writeHead(200, corsHeaders);
+            res.end(JSON.stringify(data));
+        } catch (e) {
+            res.writeHead(500, corsHeaders);
+            res.end(JSON.stringify({ error: e.message }));
+        }
+        return;
+    }
+
+    // Health check REAL de todos os serviços (pinga OpenAI, UAZAPI, Feegow, etc.)
+    if (req.method === 'GET' && req.url === '/dashboard/health-check') {
+        const corsHeaders = {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'no-cache'
+        };
+        try {
+            const services = await runHealthChecks();
+            res.writeHead(200, corsHeaders);
+            res.end(JSON.stringify({ services, timestamp: new Date().toISOString() }));
+        } catch (e) {
+            res.writeHead(500, corsHeaders);
+            res.end(JSON.stringify({ error: e.message }));
+        }
+        return;
+    }
+
+    // CORS preflight para dashboard e health-check
+    if (req.method === 'OPTIONS' && req.url?.startsWith('/dashboard')) {
+        res.writeHead(204, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+        });
+        res.end();
+        return;
+    }
+
     // Rota não encontrada
     res.writeHead(404);
     res.end('Not Found');
@@ -564,7 +644,7 @@ const server = http.createServer((req, res) => {
 async function start() {
     console.log('\n======================================================');
     console.log('🤖 SOFIA AGENT - QUALITY HAIR');
-    console.log('📡 Modo: Twilio WhatsApp Webhook');
+    console.log('📡 Modo: UAZAPI WhatsApp Webhook');
     console.log('======================================================\n');
 
     // Verificar status do cliente de mensagens
@@ -582,6 +662,19 @@ async function start() {
         console.error('⚠️ Falha ao inicializar KB:', err.message);
     }
 
+    // Inicializar Feegow API
+    if (feegow.isConfigured()) {
+        try {
+            const procedures = await feegow.listProcedures();
+            console.log(`📋 Feegow conectado: ${procedures.length} procedimentos disponíveis`);
+            procedures.forEach(p => console.log(`   - ${p.nome}: R$${p.valor.toFixed(2)} (${p.tempo}min)`));
+        } catch (err) {
+            console.error(`⚠️ Falha ao conectar Feegow: ${err.message}`);
+        }
+    } else {
+        console.warn('⚠️ FEEGOW_TOKEN não configurado — agendamentos via Feegow desabilitados');
+    }
+
     // Subir servidor webhook
     server.listen(WEBHOOK_PORT, () => {
         console.log(`\n🌐 Webhook server rodando na porta ${WEBHOOK_PORT}`);
@@ -592,6 +685,8 @@ async function start() {
         console.log(`   POST http://localhost:${WEBHOOK_PORT}/lgpd/delete`);
         console.log(`   GET  http://localhost:${WEBHOOK_PORT}/lgpd/export?phone=...`);
         console.log(`   GET  http://localhost:${WEBHOOK_PORT}/audit?phone=...&limit=100`);
+        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/dashboard`);
+        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/dashboard/data`);
         console.log('\n✅ Sofia está pronta para atender!');
         auditLogger.startup();
         console.log('📌 Configure a URL do webhook na sua API de mensagens:');

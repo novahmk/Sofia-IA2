@@ -1,0 +1,1062 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sofia IA — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+  :root {
+    --bg0: #08090d;
+    --bg1: #0e1018;
+    --bg2: #141620;
+    --bg3: #1c1f2e;
+    --bg4: #242840;
+    --border: rgba(255,255,255,0.06);
+    --border-bright: rgba(255,255,255,0.12);
+    --teal: #00d4aa;
+    --teal-dim: rgba(0,212,170,0.15);
+    --teal-glow: rgba(0,212,170,0.4);
+    --purple: #8b5cf6;
+    --purple-dim: rgba(139,92,246,0.15);
+    --amber: #f59e0b;
+    --amber-dim: rgba(245,158,11,0.15);
+    --red: #ef4444;
+    --red-dim: rgba(239,68,68,0.15);
+    --blue: #3b82f6;
+    --blue-dim: rgba(59,130,246,0.15);
+    --text-1: #f1f5f9;
+    --text-2: #94a3b8;
+    --text-3: #4b5568;
+    --font: 'Space Grotesk', sans-serif;
+    --mono: 'JetBrains Mono', monospace;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --sidebar-w: 220px;
+    --transition: 0.2s cubic-bezier(0.4,0,0.2,1);
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg0); color: var(--text-1); font-family: var(--font); height: 100%; overflow: hidden; }
+
+  .layout { display: flex; height: 100vh; overflow: hidden; }
+
+  /* SIDEBAR */
+  .sidebar { width: var(--sidebar-w); background: var(--bg1); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; position: relative; overflow: hidden; }
+  .sidebar::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--teal), transparent); opacity: 0.6; }
+  .logo-wrap { padding: 20px 18px 16px; border-bottom: 1px solid var(--border); }
+  .logo-icon { width: 36px; height: 36px; background: linear-gradient(135deg, var(--teal), var(--purple)); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 10px; box-shadow: 0 0 20px var(--teal-glow); }
+  .logo-name { font-size: 15px; font-weight: 600; background: linear-gradient(90deg, var(--teal), var(--purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: -0.3px; }
+  .logo-sub { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }
+  .nav-section { padding: 12px 10px 6px; font-size: 9px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: 1.2px; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 14px; margin: 1px 8px; border-radius: var(--radius-sm); cursor: pointer; transition: var(--transition); font-size: 12.5px; font-weight: 500; color: var(--text-2); position: relative; }
+  .nav-item:hover { background: var(--bg3); color: var(--text-1); }
+  .nav-item.active { background: var(--teal-dim); color: var(--teal); }
+  .nav-item.active::before { content: ''; position: absolute; left: -8px; width: 3px; height: 70%; top: 15%; background: var(--teal); border-radius: 0 3px 3px 0; box-shadow: 0 0 8px var(--teal-glow); }
+  .nav-icon { font-size: 14px; width: 18px; text-align: center; flex-shrink: 0; }
+  .nav-badge { margin-left: auto; background: var(--teal-dim); color: var(--teal); font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 20px; }
+  .sidebar-footer { margin-top: auto; padding: 14px 18px; border-top: 1px solid var(--border); }
+  .status-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
+  .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 0 0 var(--teal-glow); animation: pulse 2s infinite; flex-shrink: 0; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(0,212,170,0.4); } 70% { box-shadow: 0 0 0 6px rgba(0,212,170,0); } 100% { box-shadow: 0 0 0 0 rgba(0,212,170,0); } }
+  .uptime-bar { height: 3px; border-radius: 2px; background: var(--bg4); margin-top: 8px; overflow: hidden; }
+  .uptime-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--teal), var(--purple)); }
+
+  /* MAIN */
+  .main { flex: 1; overflow-y: auto; overflow-x: hidden; background: var(--bg0); scrollbar-width: thin; scrollbar-color: var(--bg4) transparent; }
+  .main::-webkit-scrollbar { width: 5px; }
+  .main::-webkit-scrollbar-track { background: transparent; }
+  .main::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 10px; }
+
+  /* TOPBAR */
+  .topbar { position: sticky; top: 0; z-index: 10; background: rgba(8,9,13,0.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .topbar-title { font-size: 16px; font-weight: 600; color: var(--text-1); letter-spacing: -0.3px; }
+  .topbar-meta { font-size: 11px; color: var(--text-3); font-family: var(--mono); }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .btn-sm { padding: 6px 14px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 600; font-family: var(--font); cursor: pointer; border: none; transition: var(--transition); }
+  .btn-ghost { background: var(--bg3); color: var(--text-2); border: 1px solid var(--border-bright); }
+  .btn-ghost:hover { background: var(--bg4); color: var(--text-1); }
+  .btn-primary { background: linear-gradient(135deg, var(--teal), #00b8a0); color: #08090d; box-shadow: 0 0 16px var(--teal-glow); }
+  .btn-primary:hover { box-shadow: 0 0 24px var(--teal-glow); }
+
+  /* PAGES */
+  .page { display: none; padding: 20px 24px 32px; }
+  .page.active { display: block; animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* GRIDS */
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  .grid-6-4 { display: grid; grid-template-columns: 6fr 4fr; gap: 12px; margin-bottom: 16px; }
+  .mb { margin-bottom: 16px; }
+
+  /* CARDS */
+  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; position: relative; overflow: hidden; transition: border-color var(--transition); }
+  .card:hover { border-color: var(--border-bright); }
+  .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .card-title { font-size: 11px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.8px; }
+  .card-action { font-size: 11px; color: var(--teal); cursor: pointer; font-weight: 500; }
+
+  /* KPI */
+  .kpi { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; position: relative; overflow: hidden; transition: all var(--transition); }
+  .kpi::after { content: ''; position: absolute; top: 0; right: 0; width: 60px; height: 60px; border-radius: 0 var(--radius) 0 60px; opacity: 0.08; }
+  .kpi.teal::after { background: var(--teal); }
+  .kpi.purple::after { background: var(--purple); }
+  .kpi.amber::after { background: var(--amber); }
+  .kpi.blue::after { background: var(--blue); }
+  .kpi.red::after { background: var(--red); }
+  .kpi:hover { transform: translateY(-1px); border-color: var(--border-bright); }
+  .kpi-label { font-size: 10.5px; font-weight: 500; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.7px; margin-bottom: 10px; }
+  .kpi-value { font-size: 28px; font-weight: 700; color: var(--text-1); letter-spacing: -1px; line-height: 1; margin-bottom: 8px; }
+  .kpi-sub { font-size: 11px; color: var(--text-3); display: flex; align-items: center; gap: 4px; }
+  .kpi-icon { position: absolute; top: 14px; right: 14px; font-size: 20px; opacity: 0.4; }
+
+  /* TABLE */
+  .data-table { width: 100%; border-collapse: collapse; }
+  .data-table th { font-size: 10px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.7px; padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+  .data-table td { padding: 10px 12px; font-size: 12.5px; color: var(--text-1); border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .data-table tr:last-child td { border-bottom: none; }
+  .data-table tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* BADGES */
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 20px; font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+  .badge-teal { background: var(--teal-dim); color: var(--teal); }
+  .badge-purple { background: var(--purple-dim); color: var(--purple); }
+  .badge-amber { background: var(--amber-dim); color: var(--amber); }
+  .badge-red { background: var(--red-dim); color: var(--red); }
+  .badge-blue { background: var(--blue-dim); color: var(--blue); }
+  .badge-gray { background: rgba(255,255,255,0.06); color: var(--text-2); }
+
+  /* AVATAR */
+  .av { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+  .av-1 { background: linear-gradient(135deg,#00d4aa,#00b8a0); color: #08090d; }
+  .av-2 { background: linear-gradient(135deg,#8b5cf6,#7c3aed); color: #fff; }
+  .av-3 { background: linear-gradient(135deg,#f59e0b,#d97706); color: #08090d; }
+  .av-4 { background: linear-gradient(135deg,#3b82f6,#2563eb); color: #fff; }
+  .av-5 { background: linear-gradient(135deg,#ef4444,#dc2626); color: #fff; }
+
+  /* CONV */
+  .conv-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); cursor: pointer; transition: var(--transition); }
+  .conv-item:last-child { border-bottom: none; padding-bottom: 0; }
+  .conv-item:hover { padding-left: 4px; }
+  .conv-body { flex: 1; min-width: 0; }
+  .conv-name { font-size: 12.5px; font-weight: 600; color: var(--text-1); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .conv-msg { font-size: 11.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+  .conv-time { font-size: 10.5px; color: var(--text-3); flex-shrink: 0; font-family: var(--mono); }
+
+  /* FUNNEL */
+  .funnel-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .funnel-row:last-child { margin-bottom: 0; }
+  .funnel-lbl { font-size: 11.5px; color: var(--text-2); width: 90px; flex-shrink: 0; }
+  .funnel-wrap { flex: 1; background: var(--bg4); border-radius: 4px; height: 22px; overflow: hidden; }
+  .funnel-bar { height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 8px; font-size: 10.5px; font-weight: 700; color: rgba(255,255,255,0.9); transition: width 1s ease; }
+  .funnel-n { font-size: 12px; font-weight: 600; color: var(--text-1); width: 32px; text-align: right; flex-shrink: 0; font-family: var(--mono); }
+
+  /* SYS */
+  .sys-row { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  .sys-row:last-child { border-bottom: none; }
+  .sys-key { color: var(--text-2); }
+  .sys-val { display: flex; align-items: center; gap: 6px; font-weight: 500; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .dot-on { background: var(--teal); box-shadow: 0 0 6px var(--teal-glow); }
+  .dot-warn { background: var(--amber); box-shadow: 0 0 6px rgba(245,158,11,0.5); }
+  .dot-off { background: var(--red); box-shadow: 0 0 6px rgba(239,68,68,0.5); }
+
+  /* CB */
+  .cb-card { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px; }
+  .cb-card:last-child { margin-bottom: 0; }
+  .cb-name { font-size: 12.5px; font-weight: 600; color: var(--text-1); }
+  .cb-lat { font-size: 11px; color: var(--text-3); font-family: var(--mono); margin-top: 2px; }
+  .cb-status { padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+  .cb-closed { background: var(--teal-dim); color: var(--teal); }
+  .cb-open { background: var(--red-dim); color: var(--red); }
+
+  /* AB */
+  .ab-row { display: flex; gap: 12px; margin-bottom: 14px; }
+  .ab-panel { flex: 1; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; }
+  .ab-label { font-size: 10px; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+  .ab-variant { font-size: 13px; font-weight: 600; color: var(--text-1); margin-bottom: 10px; }
+  .ab-metric { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-2); margin-bottom: 4px; }
+  .ab-metric span { font-weight: 600; color: var(--text-1); }
+  .progress-wrap { background: var(--bg4); border-radius: 4px; height: 6px; overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 4px; }
+
+  /* LOG */
+  .log-item { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .log-item:last-child { border-bottom: none; }
+  .log-time { color: var(--text-3); font-family: var(--mono); font-size: 10.5px; white-space: nowrap; margin-top: 1px; }
+  .log-msg { color: var(--text-2); flex: 1; line-height: 1.4; }
+  .log-msg strong { color: var(--text-1); }
+
+  .mini-stat { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .mini-stat:last-child { border-bottom: none; }
+  .mini-k { font-size: 12px; color: var(--text-2); }
+  .mini-v { font-size: 12.5px; font-weight: 600; color: var(--text-1); font-family: var(--mono); }
+
+  .ticker { font-family: var(--mono); font-size: 11px; color: var(--teal); background: var(--teal-dim); border: 1px solid rgba(0,212,170,0.2); border-radius: 6px; padding: 6px 12px; display: inline-flex; align-items: center; gap: 8px; }
+
+  .section-label { font-size: 11px; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 12px; margin-top: 4px; display: flex; align-items: center; gap: 8px; }
+  .section-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  .inner-scroll { max-height: 280px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--bg4) transparent; }
+  .inner-scroll::-webkit-scrollbar { width: 3px; }
+  .inner-scroll::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 10px; }
+
+  .empty-state { text-align: center; padding: 30px 10px; color: var(--text-3); font-size: 12px; }
+  .empty-state .empty-icon { font-size: 28px; margin-bottom: 8px; opacity: 0.5; }
+
+  .conn-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--mono); padding: 4px 10px; border-radius: 6px; }
+  .conn-ok { background: var(--teal-dim); color: var(--teal); }
+  .conn-err { background: var(--red-dim); color: var(--red); }
+
+  canvas { display: block; }
+</style>
+</head>
+<body>
+
+<div class="layout">
+  <nav class="sidebar">
+    <div class="logo-wrap">
+      <div class="logo-icon">S</div>
+      <div class="logo-name">Sofia IA</div>
+      <div class="logo-sub">Quality Hair</div>
+    </div>
+
+    <div class="nav-section">Principal</div>
+    <div class="nav-item active" onclick="nav('visao',this)">
+      <span class="nav-icon">&#x2B21;</span> Vis&atilde;o Geral
+      <span class="nav-badge" id="nb-conv">0</span>
+    </div>
+    <div class="nav-item" onclick="nav('conversas',this)">
+      <span class="nav-icon">&#x1F4AC;</span> Conversas
+      <span class="nav-badge" id="nb-active">0</span>
+    </div>
+    <div class="nav-item" onclick="nav('leads',this)">
+      <span class="nav-icon">&#x1F464;</span> Clientes
+    </div>
+    <div class="nav-item" onclick="nav('agendamentos',this)">
+      <span class="nav-icon">&#x1F4C5;</span> Agendamentos
+    </div>
+
+    <div class="nav-section">Analytics</div>
+    <div class="nav-item" onclick="nav('kpis',this)">
+      <span class="nav-icon">&#x1F4CA;</span> KPIs &amp; Analytics
+    </div>
+    <div class="nav-item" onclick="nav('abteste',this)">
+      <span class="nav-icon">&#x26A1;</span> Testes A/B
+    </div>
+
+    <div class="nav-section">Sistema</div>
+    <div class="nav-item" onclick="nav('sistema',this)">
+      <span class="nav-icon">&#x1F527;</span> Sa&uacute;de SWOP
+    </div>
+    <div class="nav-item" onclick="nav('seguranca',this)">
+      <span class="nav-icon">&#x1F512;</span> Seguran&ccedil;a &amp; LGPD
+    </div>
+    <div class="nav-item" onclick="nav('kb',this)">
+      <span class="nav-icon">&#x1F4DA;</span> Knowledge Base
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="status-row">
+        <div class="pulse-dot" id="pulse-main"></div>
+        <span id="conn-label">Conectando...</span>
+      </div>
+      <div class="uptime-bar" style="margin-top:8px"><div class="uptime-fill" id="uptime-fill" style="width:0%"></div></div>
+      <div style="font-size:10px;color:var(--text-3);margin-top:5px;font-family:var(--mono)" id="uptime-text">Uptime --</div>
+    </div>
+  </nav>
+
+  <div class="main">
+    <div class="topbar">
+      <div>
+        <div class="topbar-title" id="tb-title">Vis&atilde;o Geral</div>
+        <div class="topbar-meta" id="tb-meta">Carregando dados...</div>
+      </div>
+      <div class="topbar-right">
+        <div class="ticker">
+          <span class="pulse-dot" style="width:6px;height:6px"></span>
+          <span id="live-ticker">--</span>
+        </div>
+        <span class="conn-status conn-err" id="conn-badge">&#x25CF; offline</span>
+        <button class="btn-sm btn-primary" id="hc-btn" onclick="forceHealthCheck()">&#x26A1; Testar Conex&otilde;es</button>
+        <button class="btn-sm btn-ghost" onclick="fetchData()">&#x21BB; Atualizar</button>
+      </div>
+    </div>
+
+    <!-- VIS&Atilde;O GERAL -->
+    <div class="page active" id="page-visao">
+      <div class="grid-4">
+        <div class="kpi teal"><div class="kpi-icon">&#x1F4AC;</div><div class="kpi-label">Conversas</div><div class="kpi-value" id="kpi-conv">0</div><div class="kpi-sub" id="kpi-conv-sub">carregando</div></div>
+        <div class="kpi purple"><div class="kpi-icon">&#x1F464;</div><div class="kpi-label">Leads qualificados</div><div class="kpi-value" id="kpi-leads">0</div><div class="kpi-sub" id="kpi-leads-sub">--</div></div>
+        <div class="kpi amber"><div class="kpi-icon">&#x1F4C5;</div><div class="kpi-label">Agendamentos</div><div class="kpi-value" id="kpi-appts">0</div><div class="kpi-sub" id="kpi-appts-sub">--</div></div>
+        <div class="kpi blue"><div class="kpi-icon">&#x26A1;</div><div class="kpi-label">Resp. m&eacute;dia</div><div class="kpi-value" id="kpi-resp">--</div><div class="kpi-sub" id="kpi-resp-sub">--</div></div>
+      </div>
+      <div class="grid-6-4">
+        <div class="card"><div class="card-head"><div class="card-title">Mensagens por hora</div><div class="card-action">hoje</div></div><div style="height:160px;position:relative"><canvas id="c-hora"></canvas></div></div>
+        <div class="card"><div class="card-head"><div class="card-title">Distribui&ccedil;&atilde;o de sentimento</div></div><div style="height:160px;position:relative"><canvas id="c-sentiment-pie"></canvas></div></div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head"><div class="card-title">Funil de vendas</div></div>
+          <div id="funnel-container">
+            <div class="empty-state"><div class="empty-icon">&#x1F4CA;</div>Sem dados de funil ainda</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><div class="card-title">Status dos servi&ccedil;os</div></div>
+          <div id="services-container">
+            <div class="empty-state"><div class="empty-icon">&#x1F527;</div>Carregando...</div>
+          </div>
+        </div>
+      </div>
+      <div class="card mb">
+        <div class="card-head"><div class="card-title">Distribui&ccedil;&atilde;o de inten&ccedil;&otilde;es</div></div>
+        <div style="height:100px;position:relative"><canvas id="c-intencoes"></canvas></div>
+      </div>
+    </div>
+
+    <!-- CONVERSAS -->
+    <div class="page" id="page-conversas">
+      <div class="grid-4">
+        <div class="kpi teal"><div class="kpi-label">Ativas agora</div><div class="kpi-value" id="cv-active">0</div><div class="kpi-sub" id="cv-active-sub">--</div></div>
+        <div class="kpi purple"><div class="kpi-label">Modo manual</div><div class="kpi-value" id="cv-manual">0</div><div class="kpi-sub">handoff ativo</div></div>
+        <div class="kpi amber"><div class="kpi-label">Escalonamentos</div><div class="kpi-value" id="cv-esc">0</div><div class="kpi-sub">total</div></div>
+        <div class="kpi blue"><div class="kpi-label">Total msgs</div><div class="kpi-value" id="cv-msgs">0</div><div class="kpi-sub">processadas</div></div>
+      </div>
+      <div class="card mb">
+        <div class="card-head"><div class="card-title">Conversas ativas</div><div class="card-action" onclick="fetchData()">atualizar</div></div>
+        <div class="inner-scroll" id="conv-list">
+          <div class="empty-state"><div class="empty-icon">&#x1F4AC;</div>Nenhuma conversa ativa no momento.<br>As conversas aparecer&atilde;o aqui quando clientes enviarem mensagens via WhatsApp.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CLIENTES -->
+    <div class="page" id="page-leads">
+      <div class="grid-3">
+        <div class="kpi teal"><div class="kpi-label">Total clientes</div><div class="kpi-value" id="cl-total">0</div><div class="kpi-sub">rastreados</div></div>
+        <div class="kpi purple"><div class="kpi-label">Agendados</div><div class="kpi-value" id="cl-booked">0</div><div class="kpi-sub">com consulta</div></div>
+        <div class="kpi amber"><div class="kpi-label">Sentimento positivo</div><div class="kpi-value" id="cl-positive">0</div><div class="kpi-sub">clientes</div></div>
+      </div>
+      <div class="card mb">
+        <div class="card-head"><div class="card-title">Perfis de clientes</div></div>
+        <div id="clients-table-wrap">
+          <div class="empty-state"><div class="empty-icon">&#x1F464;</div>Nenhum cliente registrado ainda.<br>Perfis ser&atilde;o criados automaticamente conforme clientes interagem.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AGENDAMENTOS -->
+    <div class="page" id="page-agendamentos">
+      <div class="grid-3">
+        <div class="kpi teal"><div class="kpi-label">Agendamentos</div><div class="kpi-value" id="ag-total">0</div><div class="kpi-sub">via Sofia</div></div>
+        <div class="kpi amber"><div class="kpi-label">Taxa convers&atilde;o</div><div class="kpi-value" id="ag-rate">0%</div><div class="kpi-sub">leads &rarr; agendamento</div></div>
+        <div class="kpi blue"><div class="kpi-label">Escalonamentos</div><div class="kpi-value" id="ag-esc">0</div><div class="kpi-sub">total</div></div>
+      </div>
+      <div class="card mb">
+        <div class="card-head"><div class="card-title">Dados de agendamento</div></div>
+        <div class="empty-state"><div class="empty-icon">&#x1F4C5;</div>Agendamentos realizados pela Sofia aparecer&atilde;o aqui em tempo real.</div>
+      </div>
+    </div>
+
+    <!-- KPIs -->
+    <div class="page" id="page-kpis">
+      <div class="grid-4">
+        <div class="kpi teal"><div class="kpi-label">Tempo m&eacute;dio resp.</div><div class="kpi-value" id="k-avg">--</div><div class="kpi-sub" id="k-p95">--</div></div>
+        <div class="kpi purple"><div class="kpi-label">Msgs processadas</div><div class="kpi-value" id="k-msgs">0</div><div class="kpi-sub">total</div></div>
+        <div class="kpi amber"><div class="kpi-label">Taxa escalon.</div><div class="kpi-value" id="k-esc">0%</div><div class="kpi-sub">do total</div></div>
+        <div class="kpi blue"><div class="kpi-label">Taxa booking</div><div class="kpi-value" id="k-book">0%</div><div class="kpi-sub">convers&atilde;o</div></div>
+      </div>
+      <div class="grid-2">
+        <div class="card"><div class="card-head"><div class="card-title">Sentimento ao longo do tempo</div></div><div style="height:150px;position:relative"><canvas id="c-sentiment-line"></canvas></div></div>
+        <div class="card">
+          <div class="card-head"><div class="card-title">M&eacute;tricas detalhadas</div></div>
+          <div id="detailed-metrics">
+            <div class="mini-stat"><span class="mini-k">Msgs processadas</span><span class="mini-v" id="dm-msgs">0</span></div>
+            <div class="mini-stat"><span class="mini-k">Conversas</span><span class="mini-v" id="dm-conv">0</span></div>
+            <div class="mini-stat"><span class="mini-k">Agendamentos</span><span class="mini-v" id="dm-appts">0</span></div>
+            <div class="mini-stat"><span class="mini-k">Escalonamentos</span><span class="mini-v" id="dm-esc">0</span></div>
+            <div class="mini-stat"><span class="mini-k">Msgs &aacute;udio</span><span class="mini-v" id="dm-audio">0</span></div>
+            <div class="mini-stat"><span class="mini-k">Msgs imagem</span><span class="mini-v" id="dm-image">0</span></div>
+            <div class="mini-stat"><span class="mini-k">Taxa erro</span><span class="mini-v" id="dm-err">0%</span></div>
+            <div class="mini-stat"><span class="mini-k">Sess&otilde;es ativas</span><span class="mini-v" id="dm-sess">0</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="card mb">
+        <div class="card-head"><div class="card-title">Distribui&ccedil;&atilde;o de inten&ccedil;&otilde;es</div></div>
+        <div style="height:180px;position:relative"><canvas id="c-pie-intent"></canvas></div>
+      </div>
+    </div>
+
+    <!-- A/B -->
+    <div class="page" id="page-abteste">
+      <div class="grid-3">
+        <div class="kpi teal"><div class="kpi-label">Teste ativo</div><div class="kpi-value" style="font-size:20px" id="ab-name">--</div><div class="kpi-sub" id="ab-name-sub">--</div></div>
+        <div class="kpi purple"><div class="kpi-label">Vencedor atual</div><div class="kpi-value" id="ab-winner">--</div><div class="kpi-sub" id="ab-winner-sub">--</div></div>
+        <div class="kpi amber"><div class="kpi-label">Total atribu&iacute;dos</div><div class="kpi-value" id="ab-total">0</div><div class="kpi-sub">usu&aacute;rios</div></div>
+      </div>
+      <div id="ab-panels-container">
+        <div class="empty-state"><div class="empty-icon">&#x26A1;</div>Dados de A/B testing aparecer&atilde;o aqui quando usu&aacute;rios forem atribu&iacute;dos a variantes.</div>
+      </div>
+    </div>
+
+    <!-- SISTEMA -->
+    <div class="page" id="page-sistema">
+      <div class="grid-4">
+        <div class="kpi teal"><div class="kpi-label">Lat&ecirc;ncia m&eacute;dia</div><div class="kpi-value" id="sw-lat">--</div><div class="kpi-sub" id="sw-lat-sub">--</div></div>
+        <div class="kpi purple"><div class="kpi-label">Uptime</div><div class="kpi-value" id="sw-up">--</div><div class="kpi-sub">desde o boot</div></div>
+        <div class="kpi blue"><div class="kpi-label">Self-healing</div><div class="kpi-value" id="sw-heal">0</div><div class="kpi-sub">recupera&ccedil;&otilde;es</div></div>
+        <div class="kpi amber"><div class="kpi-label">Taxa de erro</div><div class="kpi-value" id="sw-err">0%</div><div class="kpi-sub" id="sw-err-sub">--</div></div>
+      </div>
+      <div id="system-services-container">
+        <div class="section-label">Servi&ccedil;os</div>
+        <div class="empty-state"><div class="empty-icon">&#x1F527;</div>Carregando status dos servi&ccedil;os...</div>
+      </div>
+      <div class="section-label" style="margin-top:16px">Erros recentes</div>
+      <div class="card mb" id="errors-container">
+        <div class="empty-state"><div class="empty-icon">&#x2713;</div>Nenhum erro recente</div>
+      </div>
+    </div>
+
+    <!-- SEGURAN&Ccedil;A -->
+    <div class="page" id="page-seguranca">
+      <div class="grid-4">
+        <div class="kpi teal"><div class="kpi-label">Msgs sanitizadas</div><div class="kpi-value" id="sec-san">0</div><div class="kpi-sub">100% analisadas</div></div>
+        <div class="kpi red"><div class="kpi-label">Inje&ccedil;&otilde;es bloqueadas</div><div class="kpi-value" id="sec-inj">0</div><div class="kpi-sub">prompt injection</div></div>
+        <div class="kpi amber"><div class="kpi-label">T&oacute;picos bloqueados</div><div class="kpi-value" id="sec-topic">0</div><div class="kpi-sub">blacklist</div></div>
+        <div class="kpi purple"><div class="kpi-label">Consentimentos LGPD</div><div class="kpi-value" id="sec-lgpd">0</div><div class="kpi-sub">rastreados</div></div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head"><div class="card-title">Audit trail &mdash; &uacute;ltimos eventos</div></div>
+          <div class="inner-scroll" id="audit-list">
+            <div class="empty-state"><div class="empty-icon">&#x1F512;</div>Nenhum evento de auditoria ainda.</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><div class="card-title">Gest&atilde;o LGPD</div></div>
+          <div class="mini-stat"><span class="mini-k">A&ccedil;&otilde;es auditadas</span><span class="mini-v" id="lgpd-actions" style="color:var(--teal)">0</span></div>
+          <div class="mini-stat"><span class="mini-k">Consentimentos</span><span class="mini-v" id="lgpd-consents">0</span></div>
+          <div class="mini-stat"><span class="mini-k">Solicit. exporta&ccedil;&atilde;o</span><span class="mini-v" id="lgpd-exports">0</span></div>
+          <div class="mini-stat"><span class="mini-k">Solicit. exclus&atilde;o</span><span class="mini-v" id="lgpd-deletes">0</span></div>
+          <div class="mini-stat"><span class="mini-k">Rate limits</span><span class="mini-v" id="lgpd-rate" style="color:var(--teal)">0 bloqueados</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- KB -->
+    <div class="page" id="page-kb">
+      <div class="grid-3">
+        <div class="kpi teal"><div class="kpi-label">Documentos no KB</div><div class="kpi-value" id="kb-docs">0</div><div class="kpi-sub">RAG ativo</div></div>
+        <div class="kpi amber"><div class="kpi-label">Queries realizadas</div><div class="kpi-value" id="kb-queries">0</div><div class="kpi-sub">buscas no KB</div></div>
+        <div class="kpi purple"><div class="kpi-label">Gaps</div><div class="kpi-value" id="kb-gaps">0</div><div class="kpi-sub">sem resposta</div></div>
+      </div>
+      <div class="card mb">
+        <div class="card-head"><div class="card-title">Knowledge Base</div></div>
+        <div class="empty-state"><div class="empty-icon">&#x1F4DA;</div>Dados do Knowledge Base aparecer&atilde;o aqui quando a Sofia processar buscas.</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// =====================================================
+// CONFIGURA&Ccedil;&Atilde;O
+// =====================================================
+
+// Auto-detect API base URL
+var API_BASE = (window.location.origin && window.location.protocol !== 'file:')
+    ? window.location.origin
+    : 'http://localhost:3000';
+
+var REFRESH_INTERVAL = 10000; // 10 seconds
+var lastData = null;
+var connected = false;
+var charts = {};
+var refreshTimer = null;
+var healthData = null; // Health check real dos serviços
+
+// =====================================================
+// NAVEGA&Ccedil;&Atilde;O
+// =====================================================
+
+var TITLES = {
+  visao: 'Vis\u00e3o Geral', conversas: 'Conversas em Tempo Real',
+  leads: 'Perfis de Clientes', agendamentos: 'Agendamentos',
+  kpis: 'KPIs & Analytics', abteste: 'Testes A/B',
+  sistema: 'Sa\u00fade do Sistema (SWOP)', seguranca: 'Seguran\u00e7a & LGPD',
+  kb: 'Knowledge Base'
+};
+
+function nav(id, el) {
+  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+  document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
+  document.getElementById('page-' + id).classList.add('active');
+  el.classList.add('active');
+  document.getElementById('tb-title').textContent = TITLES[id] || id;
+}
+
+// =====================================================
+// FETCH DATA
+// =====================================================
+
+function fetchData() {
+  // Buscar dados do dashboard E health check em paralelo 
+  Promise.all([
+    fetch(API_BASE + '/dashboard/data').then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }),
+    fetch(API_BASE + '/dashboard/health-check').then(function(res) {
+      if (!res.ok) throw new Error('Health HTTP ' + res.status);
+      return res.json();
+    }).catch(function() { return null; }) // health check é opcional
+  ]).then(function(results) {
+    var data = results[0];
+    var health = results[1];
+    lastData = data;
+    connected = true;
+    healthData = health;
+    updateConnectionStatus(true);
+    // Sobrescrever services com dados reais do health check
+    if (health && health.services) {
+      data.services = health.services;
+    }
+    renderAll(data);
+  }).catch(function(err) {
+    connected = false;
+    healthData = null;
+    updateConnectionStatus(false, err.message);
+  });
+}
+
+// Força health check manual (botão "Testar Conexões")
+function forceHealthCheck() {
+  var badge = document.getElementById('hc-btn');
+  if (badge) { badge.textContent = 'Testando...'; badge.disabled = true; }
+  fetch(API_BASE + '/dashboard/health-check')
+    .then(function(res) { return res.json(); })
+    .then(function(health) {
+      healthData = health;
+      if (lastData && health && health.services) {
+        lastData.services = health.services;
+        renderOverview(lastData);
+        renderSystem(lastData);
+      }
+      if (badge) { badge.textContent = '\u2713 Verificado'; badge.disabled = false; setTimeout(function() { badge.textContent = '\u26A1 Testar Conex\u00f5es'; }, 2000); }
+    })
+    .catch(function() {
+      if (badge) { badge.textContent = '\u2717 Falhou'; badge.disabled = false; setTimeout(function() { badge.textContent = '\u26A1 Testar Conex\u00f5es'; }, 2000); }
+    });
+}
+
+function updateConnectionStatus(ok, errMsg) {
+  var badge = document.getElementById('conn-badge');
+  var label = document.getElementById('conn-label');
+  var pulse = document.getElementById('pulse-main');
+  if (ok) {
+    badge.className = 'conn-status conn-ok';
+    badge.innerHTML = '&#x25CF; live';
+    label.textContent = 'Sofia online';
+    pulse.style.background = 'var(--teal)';
+  } else {
+    badge.className = 'conn-status conn-err';
+    badge.innerHTML = '&#x25CF; offline';
+    label.textContent = 'Desconectado';
+    pulse.style.background = 'var(--red)';
+  }
+  var now = new Date();
+  var timeStr = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0') + ':' + now.getSeconds().toString().padStart(2,'0');
+  document.getElementById('tb-meta').textContent = ok
+    ? 'Dados reais \u00b7 atualizado ' + timeStr + ' \u00b7 refresh ' + (REFRESH_INTERVAL/1000) + 's'
+    : 'Sem conex\u00e3o com a API \u00b7 ' + (errMsg || '') + ' \u00b7 tentando ' + API_BASE;
+}
+
+// =====================================================
+// RENDER ALL
+// =====================================================
+
+function renderAll(d) {
+  renderOverview(d);
+  renderConversations(d);
+  renderClients(d);
+  renderAgendamentos(d);
+  renderKPIs(d);
+  renderABTest(d);
+  renderSystem(d);
+  renderSecurity(d);
+  renderKB(d);
+  renderTicker(d);
+  // Update uptime bar
+  var p = d.performance || {};
+  if (p.uptimeFormatted) {
+    document.getElementById('uptime-text').textContent = 'Uptime ' + p.uptimeFormatted;
+    document.getElementById('uptime-fill').style.width = '100%';
+  }
+}
+
+// =====================================================
+// VIS&Atilde;O GERAL
+// =====================================================
+
+function renderOverview(d) {
+  var o = d.overview || {};
+  var f = d.funnel || {};
+  setText('kpi-conv', o.totalConversations || 0);
+  setText('kpi-leads', f.qualified || 0);
+  setText('kpi-appts', o.totalAppointments || 0);
+  setText('kpi-resp', o.avgResponseTimeSec ? o.avgResponseTimeSec + 's' : '0s');
+  setText('nb-conv', o.totalConversations || 0);
+  setText('kpi-conv-sub', (o.totalMessages || 0) + ' mensagens');
+  setText('kpi-leads-sub', (o.conversionRate || 0).toFixed(1) + '% convers\u00e3o');
+  setText('kpi-appts-sub', (o.conversionRate || 0).toFixed(1) + '% dos leads');
+  var limit5 = parseFloat(o.avgResponseTimeSec || 0) <= 5;
+  setText('kpi-resp-sub', limit5 ? '\u2713 dentro do limite' : '\u26A0 acima de 5s');
+
+  // Hourly chart
+  var hv = d.hourlyVolume || { labels: [], data: [] };
+  renderBarChart('c-hora', hv.labels, hv.data, '#00d4aa');
+
+  // Sentiment pie
+  var sent = d.sentiment || {};
+  renderDoughnut('c-sentiment-pie', ['Positivo','Neutro','Negativo'], [sent.positive||0, sent.neutral||0, sent.negative||0], ['#00d4aa','#4b5568','#ef4444']);
+
+  // Funnel
+  var fc = document.getElementById('funnel-container');
+  var maxFunnel = Math.max(f.messages || 1, f.awareness || 1, 1);
+  var funnelData = [
+    { label: 'Awareness', val: f.awareness || 0, bg: 'linear-gradient(90deg,#3b82f6,#2563eb)' },
+    { label: 'Consideration', val: f.consideration || 0, bg: 'linear-gradient(90deg,#8b5cf6,#7c3aed)' },
+    { label: 'Decision', val: f.decision || 0, bg: 'linear-gradient(90deg,#f59e0b,#d97706)' },
+    { label: 'Customer', val: f.customer || 0, bg: 'linear-gradient(90deg,#00d4aa,#00b8a0)' },
+  ];
+  var fhtml = '';
+  funnelData.forEach(function(item) {
+    var pct = maxFunnel > 0 ? Math.max((item.val / maxFunnel) * 100, item.val > 0 ? 5 : 0) : 0;
+    fhtml += '<div class="funnel-row"><div class="funnel-lbl">' + item.label + '</div><div class="funnel-wrap"><div class="funnel-bar" style="width:' + pct + '%;background:' + item.bg + '">' + (item.val > 0 ? item.val : '') + '</div></div><div class="funnel-n">' + item.val + '</div></div>';
+  });
+  fc.innerHTML = fhtml || '<div class="empty-state"><div class="empty-icon">&#x1F4CA;</div>Sem dados de funil</div>';
+
+  // Services status
+  var svcs = d.services || {};
+  var shtml = '';
+  var svcKeys = Object.keys(svcs);
+  if (svcKeys.length) {
+    svcKeys.forEach(function(k) {
+      var s = svcs[k];
+      var dotClass = s.status === 'online' ? 'dot-on' : s.status === 'warning' ? 'dot-warn' : 'dot-off';
+      var label = s.status === 'online' ? 'Online' : s.status === 'warning' ? 'Warning' : 'Offline';
+      shtml += '<div class="sys-row"><span class="sys-key">' + esc(s.label) + '</span><span class="sys-val"><div class="dot ' + dotClass + '"></div> ' + label + '</span></div>';
+    });
+  }
+  var errCount = (d.performance || {}).totalErrors || 0;
+  shtml += '<div class="sys-row"><span class="sys-key">Erros</span><span class="sys-val" style="color:' + (errCount > 0 ? 'var(--amber)' : 'var(--teal)') + '">' + errCount + (errCount === 1 ? ' erro' : ' erros') + '</span></div>';
+  document.getElementById('services-container').innerHTML = shtml;
+
+  // Intent bar
+  var intentDist = d.intentDistribution || {};
+  var intentLabels = Object.keys(intentDist);
+  var intentValues = intentLabels.map(function(k) { return intentDist[k]; });
+  var intentColors = ['#00d4aa','#8b5cf6','#3b82f6','#ef4444','#f59e0b','#10b981','#a78bfa','#fb7185','#4b5568'];
+  renderHBarChart('c-intencoes', intentLabels, intentValues, intentColors);
+}
+
+// =====================================================
+// CONVERSAS
+// =====================================================
+
+function renderConversations(d) {
+  var convs = d.conversations || [];
+  var active = d.activeConversations || 0;
+  var manual = d.manualConversations || 0;
+  setText('cv-active', active);
+  setText('nb-active', active);
+  setText('cv-manual', manual);
+  setText('cv-esc', (d.overview || {}).totalEscalations || 0);
+  setText('cv-msgs', (d.overview || {}).totalMessages || 0);
+  setText('cv-active-sub', manual + ' manual \u00b7 ' + (active - manual) + ' auto');
+
+  var cl = document.getElementById('conv-list');
+  if (!convs.length) {
+    cl.innerHTML = '<div class="empty-state"><div class="empty-icon">&#x1F4AC;</div>Nenhuma conversa ativa.<br>Conversas aparecer\u00e3o aqui quando clientes enviarem mensagens via WhatsApp.</div>';
+    return;
+  }
+  var avColors = ['av-1','av-2','av-3','av-4','av-5'];
+  var html = '';
+  convs.forEach(function(c, i) {
+    var initials = getInitials(c.phone);
+    var avClass = avColors[i % avColors.length];
+    var badgeClass = c.mode === 'manual' ? 'badge-purple' : c.status === 'active' ? 'badge-teal' : 'badge-gray';
+    var badgeText = c.mode === 'manual' ? 'manual' : c.status || 'auto';
+    var timeTxt = c.lastMessageTime ? timeAgo(c.lastMessageTime) : '--';
+    html += '<div class="conv-item"><div class="av ' + avClass + '">' + esc(initials) + '</div><div class="conv-body"><div class="conv-name">' + esc(c.phone) + ' <span class="badge ' + badgeClass + '">' + esc(badgeText) + '</span></div><div class="conv-msg">' + esc(c.lastMessage || 'Sem mensagem') + '</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><div class="conv-time">' + esc(timeTxt) + '</div><div style="font-size:10px;color:var(--text-3)">' + (c.messageCount || 0) + ' msgs</div></div></div>';
+  });
+  cl.innerHTML = html;
+}
+
+// =====================================================
+// CLIENTES
+// =====================================================
+
+function renderClients(d) {
+  var clients = d.clients || [];
+  setText('cl-total', clients.length);
+  setText('cl-booked', clients.filter(function(c) { return c.funnelStage === 'customer' || c.funnelStage === 'decision'; }).length);
+  setText('cl-positive', clients.filter(function(c) { return c.sentiment === 'positive'; }).length);
+
+  var wrap = document.getElementById('clients-table-wrap');
+  if (!clients.length) {
+    wrap.innerHTML = '<div class="empty-state"><div class="empty-icon">&#x1F464;</div>Nenhum cliente registrado ainda.<br>Perfis ser\u00e3o criados automaticamente.</div>';
+    return;
+  }
+  var html = '<table class="data-table"><thead><tr><th>Cliente</th><th>Est\u00e1gio</th><th>Sentimento</th><th>Mensagens</th><th>Modo</th></tr></thead><tbody>';
+  var avColors = ['av-1','av-2','av-3','av-4','av-5'];
+  clients.forEach(function(c, i) {
+    var stageBadge = { awareness: 'badge-blue', consideration: 'badge-amber', decision: 'badge-teal', customer: 'badge-teal' }[c.funnelStage] || 'badge-gray';
+    var sentBadge = { positive: 'badge-teal', neutral: 'badge-amber', negative: 'badge-red' }[c.sentiment] || 'badge-gray';
+    html += '<tr><td><div style="display:flex;align-items:center;gap:8px"><div class="av ' + avColors[i%5] + '" style="width:26px;height:26px;font-size:10px">' + getInitials(c.name || c.phone) + '</div>' + esc(c.name || c.phone) + '</div></td><td><span class="badge ' + stageBadge + '">' + esc(c.funnelStage || 'unknown') + '</span></td><td><span class="badge ' + sentBadge + '">' + esc(c.sentiment || 'unknown') + '</span></td><td>' + (c.totalMessages || 0) + '</td><td><span class="badge ' + (c.mode === 'manual' ? 'badge-purple' : 'badge-gray') + '">' + esc(c.mode || 'auto') + '</span></td></tr>';
+  });
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+// =====================================================
+// AGENDAMENTOS
+// =====================================================
+
+function renderAgendamentos(d) {
+  var o = d.overview || {};
+  setText('ag-total', o.totalAppointments || 0);
+  setText('ag-rate', (o.conversionRate || 0).toFixed(1) + '%');
+  setText('ag-esc', o.totalEscalations || 0);
+}
+
+// =====================================================
+// KPIs
+// =====================================================
+
+function renderKPIs(d) {
+  var o = d.overview || {};
+  setText('k-avg', o.avgResponseTimeSec ? o.avgResponseTimeSec + 's' : '0s');
+  setText('k-p95', 'p95: ' + (o.p95ResponseTimeSec || '0') + 's');
+  setText('k-msgs', o.totalMessages || 0);
+  setText('k-esc', (o.escalationRate || 0).toFixed(1) + '%');
+  setText('k-book', (o.conversionRate || 0).toFixed(1) + '%');
+
+  setText('dm-msgs', o.totalMessages || 0);
+  setText('dm-conv', o.totalConversations || 0);
+  setText('dm-appts', o.totalAppointments || 0);
+  setText('dm-esc', o.totalEscalations || 0);
+  setText('dm-audio', (d.mediaTypes || {}).audio || 0);
+  setText('dm-image', (d.mediaTypes || {}).image || 0);
+  setText('dm-err', ((d.performance || {}).errorRate || 0) + '%');
+  setText('dm-sess', o.activeSessions || 0);
+
+  // Sentiment line
+  var sent = d.sentiment || {};
+  renderLineChart('c-sentiment-line',
+    ['Agora'],
+    [
+      { label: 'Positivo', data: [sent.positive||0], color: '#00d4aa' },
+      { label: 'Neutro', data: [sent.neutral||0], color: '#4b5568' },
+      { label: 'Negativo', data: [sent.negative||0], color: '#ef4444' },
+    ]
+  );
+
+  // Intent pie
+  var intentDist = d.intentDistribution || {};
+  var labels = Object.keys(intentDist);
+  var values = labels.map(function(k) { return intentDist[k]; });
+  var colors = ['#00d4aa','#8b5cf6','#3b82f6','#ef4444','#f59e0b','#10b981','#a78bfa','#fb7185','#4b5568'];
+  renderDoughnut('c-pie-intent', labels, values, colors.slice(0, labels.length));
+}
+
+// =====================================================
+// A/B TEST
+// =====================================================
+
+function renderABTest(d) {
+  var ab = d.abTesting || {};
+  setText('ab-total', ab.totalAssignments || 0);
+  setText('ab-winner', ab.winner || 'Indefinido');
+  setText('ab-winner-sub', ab.winner ? 'melhor convers\u00e3o' : 'sem dados suficientes');
+
+  var variants = ab.variants || {};
+  var keys = Object.keys(variants);
+  setText('ab-name', keys.length ? 'Estilo resposta' : 'Nenhum');
+  setText('ab-name-sub', keys.length + ' variantes');
+
+  var container = document.getElementById('ab-panels-container');
+  if (!keys.length || (ab.totalAssignments || 0) === 0) {
+    container.innerHTML = '<div class="empty-state"><div class="empty-icon">&#x26A1;</div>Dados de A/B testing aparecer\u00e3o aqui quando usu\u00e1rios forem atribu\u00eddos.</div>';
+    return;
+  }
+  var panelColors = { A: 'rgba(0,212,170,0.3)', B: 'rgba(139,92,246,0.3)', C: 'rgba(59,130,246,0.3)' };
+  var html = '<div class="ab-row">';
+  keys.forEach(function(k) {
+    var v = variants[k];
+    var convRate = v.totalConversations > 0 ? ((v.totalAppointments / v.totalConversations) * 100).toFixed(1) : '0.0';
+    var sents = v.sentiments || {};
+    var sentTotal = (sents.positive||0) + (sents.neutral||0) + (sents.negative||0);
+    var sentPct = sentTotal > 0 ? ((sents.positive||0)/sentTotal*100).toFixed(0) : 0;
+    html += '<div class="ab-panel" style="border-color:' + (panelColors[k] || 'var(--border)') + '"><div class="ab-label">Variante ' + esc(k) + '</div><div class="ab-variant">' + esc(v.name || k) + '</div>';
+    html += '<div class="ab-metric">Taxa agendamento <span>' + convRate + '%</span></div>';
+    html += '<div style="margin-bottom:8px"><div class="progress-wrap"><div class="progress-fill" style="width:' + convRate + '%;background:var(--teal)"></div></div></div>';
+    html += '<div class="ab-metric">Sentimento positivo <span>' + sentPct + '%</span></div>';
+    html += '<div style="margin-bottom:8px"><div class="progress-wrap"><div class="progress-fill" style="width:' + sentPct + '%;background:var(--purple)"></div></div></div>';
+    html += '<div class="ab-metric">Msgs <span>' + (v.totalMessages || 0) + '</span></div>';
+    html += '<div class="ab-metric">Escalonamentos <span>' + (v.totalEscalations || 0) + '</span></div>';
+    html += '</div>';
+  });
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+// =====================================================
+// SISTEMA
+// =====================================================
+
+function renderSystem(d) {
+  var p = d.performance || {};
+  var sh = d.selfHealing || {};
+  setText('sw-lat', p.avgLatencySec ? p.avgLatencySec + 's' : '0s');
+  setText('sw-lat-sub', p.avgLatencySec ? (parseFloat(p.avgLatencySec) <= 5 ? '\u2713 saud\u00e1vel' : '\u26A0 lento') : '--');
+  setText('sw-up', p.uptimeFormatted || '--');
+  setText('sw-heal', sh.totalRecovered || sh.totalAttempts || 0);
+  setText('sw-err', (p.errorRate || 0) + '%');
+  setText('sw-err-sub', (p.totalErrors || 0) + ' erros / ' + (p.totalMessages || 0) + ' msgs');
+
+  // Services as circuit breaker cards
+  var svcs = d.services || {};
+  var keys = Object.keys(svcs);
+  var shtml = '<div class="section-label">Servi\u00e7os</div>';
+  if (keys.length) {
+    shtml += '<div class="grid-2" style="margin-bottom:16px">';
+    keys.forEach(function(k) {
+      var s = svcs[k];
+      var cbClass = s.status === 'online' ? 'cb-closed' : 'cb-open';
+      var cbText = s.status === 'online' ? 'OK' : (s.status || 'unknown').toUpperCase();
+      shtml += '<div class="cb-card"><div><div class="cb-name">' + esc(s.label) + '</div></div><div class="cb-status ' + cbClass + '">' + cbText + '</div></div>';
+    });
+    shtml += '</div>';
+  } else {
+    shtml += '<div class="empty-state"><div class="empty-icon">&#x1F527;</div>Nenhum servi\u00e7o detectado</div>';
+  }
+  document.getElementById('system-services-container').innerHTML = shtml;
+
+  // Errors
+  var errors = p.recentErrors || [];
+  var ec = document.getElementById('errors-container');
+  if (!errors.length) {
+    ec.innerHTML = '<div class="empty-state"><div class="empty-icon">&#x2713;</div>Nenhum erro recente</div>';
+  } else {
+    var ehtml = '';
+    errors.forEach(function(e) {
+      var time = e.timestamp ? new Date(e.timestamp).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}) : '--';
+      ehtml += '<div class="log-item"><div class="log-time">' + time + '</div><div class="log-msg"><strong>[' + esc(e.errorType || 'ERROR') + ']</strong> ' + esc(e.errorMessage || '') + '</div><span class="badge badge-red">erro</span></div>';
+    });
+    ec.innerHTML = ehtml;
+  }
+}
+
+// =====================================================
+// SEGURAN&Ccedil;A
+// =====================================================
+
+function renderSecurity(d) {
+  var sec = d.security || {};
+  var lgpd = d.lgpd || {};
+  var rl = d.rateLimits || {};
+  setText('sec-san', sec.totalSanitized || 0);
+  setText('sec-inj', sec.injectionAttempts || 0);
+  setText('sec-topic', sec.topicBlocked || 0);
+  setText('sec-lgpd', lgpd.consentsTracked || 0);
+
+  setText('lgpd-actions', lgpd.auditActionTypes || 0);
+  setText('lgpd-consents', lgpd.consentsTracked || 0);
+  setText('lgpd-exports', lgpd.exportRequests || 0);
+  setText('lgpd-deletes', lgpd.deleteRequests || 0);
+  setText('lgpd-rate', (rl.blockedUsers || 0) + ' bloqueados');
+
+  // Audit logs
+  var logs = d.recentAudit || [];
+  var al = document.getElementById('audit-list');
+  if (!logs.length) {
+    al.innerHTML = '<div class="empty-state"><div class="empty-icon">&#x1F512;</div>Nenhum evento de auditoria ainda.</div>';
+    return;
+  }
+  var html = '';
+  logs.forEach(function(log) {
+    var time = log.timestamp ? new Date(log.timestamp).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}) : '--';
+    var badgeClass = 'badge-gray';
+    var action = log.action || '';
+    if (action.indexOf('BLOCK') !== -1 || action.indexOf('SANITIZED') !== -1) badgeClass = 'badge-red';
+    else if (action.indexOf('LGPD') !== -1) badgeClass = 'badge-blue';
+    else if (action.indexOf('TOPIC') !== -1) badgeClass = 'badge-amber';
+    else if (action.indexOf('MSG_SENT') !== -1 || action.indexOf('APPOINTMENT') !== -1) badgeClass = 'badge-teal';
+    html += '<div class="log-item"><div class="log-time">' + time + '</div><div class="log-msg"><strong>[' + esc(action) + ']</strong> ' + esc(log.phone || '') + ' ' + esc(((log.details || '') + '').substring(0, 80)) + '</div><span class="badge ' + badgeClass + '">' + esc(action.split('_')[0].toLowerCase()) + '</span></div>';
+  });
+  al.innerHTML = html;
+}
+
+// =====================================================
+// KB
+// =====================================================
+
+function renderKB(d) {
+  var kb = d.kb || {};
+  setText('kb-docs', kb.totalDocuments || 0);
+  setText('kb-queries', kb.queryCount || 0);
+  setText('kb-gaps', (kb.gaps || []).length || 0);
+}
+
+// =====================================================
+// TICKER
+// =====================================================
+
+var tickerIdx = 0;
+function renderTicker(d) {
+  var o = d.overview || {};
+  var p = d.performance || {};
+  var items = [
+    (o.avgResponseTimeSec || '0') + 's resp',
+    (o.totalMessages || 0) + ' msgs',
+    (o.totalConversations || 0) + ' conv',
+    (o.totalAppointments || 0) + ' agend',
+    (p.uptimeFormatted || '--') + ' uptime',
+    (p.totalErrors || 0) + ' erros',
+  ];
+  setText('live-ticker', items[tickerIdx % items.length]);
+  tickerIdx++;
+}
+
+// =====================================================
+// CHART HELPERS
+// =====================================================
+
+var chartFont = { family: "'Space Grotesk', sans-serif", size: 11 };
+var chartGridColor = 'rgba(255,255,255,0.04)';
+var chartTickColor = '#4b5568';
+
+function destroyChart(id) {
+  if (charts[id]) { charts[id].destroy(); charts[id] = null; }
+}
+
+function renderBarChart(canvasId, labels, data, color) {
+  destroyChart(canvasId);
+  var ctx = document.getElementById(canvasId);
+  if (!ctx) return;
+  charts[canvasId] = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: labels, datasets: [{ data: data, backgroundColor: color + 'cc', borderRadius: 5, borderSkipped: false }] },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: chartFont, color: chartTickColor } },
+        y: { grid: { color: chartGridColor }, ticks: { font: chartFont, color: chartTickColor }, beginAtZero: true }
+      }
+    }
+  });
+}
+
+function renderHBarChart(canvasId, labels, data, colors) {
+  destroyChart(canvasId);
+  var ctx = document.getElementById(canvasId);
+  if (!ctx) return;
+  charts[canvasId] = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: labels, datasets: [{ data: data, backgroundColor: colors.slice(0, labels.length), borderRadius: 4, borderSkipped: false }] },
+    options: { responsive: true, maintainAspectRatio: false, indexAxis: 'y', plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: chartGridColor }, ticks: { font: chartFont, color: chartTickColor }, beginAtZero: true },
+        y: { grid: { display: false }, ticks: { font: chartFont, color: '#94a3b8' } }
+      }
+    }
+  });
+}
+
+function renderDoughnut(canvasId, labels, data, colors) {
+  destroyChart(canvasId);
+  var ctx = document.getElementById(canvasId);
+  if (!ctx) return;
+  var hasData = data.some(function(v) { return v > 0; });
+  if (!hasData) { data = [1]; labels = ['Sem dados']; colors = ['#242840']; }
+  charts[canvasId] = new Chart(ctx, {
+    type: 'doughnut',
+    data: { labels: labels, datasets: [{ data: data, backgroundColor: colors, borderWidth: 0 }] },
+    options: { responsive: true, maintainAspectRatio: false, cutout: '65%',
+      plugins: { legend: { display: true, position: 'right', labels: { font: chartFont, color: '#94a3b8', boxWidth: 10, padding: 8 } } }
+    }
+  });
+}
+
+function renderLineChart(canvasId, labels, datasets) {
+  destroyChart(canvasId);
+  var ctx = document.getElementById(canvasId);
+  if (!ctx) return;
+  var ds = datasets.map(function(s) {
+    return { label: s.label, data: s.data, borderColor: s.color, backgroundColor: s.color + '10', tension: 0.4, fill: false, pointRadius: 3 };
+  });
+  charts[canvasId] = new Chart(ctx, {
+    type: 'line', data: { labels: labels, datasets: ds },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: true, labels: { font: chartFont, color: '#94a3b8', boxWidth: 10, padding: 12 } } },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: chartFont, color: chartTickColor } },
+        y: { grid: { color: chartGridColor }, ticks: { font: chartFont, color: chartTickColor }, beginAtZero: true }
+      }
+    }
+  });
+}
+
+// =====================================================
+// UTILITIES
+// =====================================================
+
+function setText(id, val) {
+  var el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+function esc(str) {
+  var d = document.createElement('div');
+  d.textContent = str || '';
+  return d.innerHTML;
+}
+
+function getInitials(name) {
+  if (!name) return '??';
+  var clean = (name + '').replace(/[+\d]/g,'').trim();
+  if (!clean) return name.substring(0,2);
+  var parts = clean.split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return clean.substring(0,2).toUpperCase();
+}
+
+function timeAgo(ts) {
+  if (!ts) return '--';
+  var diff = Date.now() - new Date(ts).getTime();
+  if (diff < 60000) return 'agora';
+  if (diff < 3600000) return Math.floor(diff/60000) + ' min';
+  if (diff < 86400000) return Math.floor(diff/3600000) + 'h';
+  return Math.floor(diff/86400000) + 'd';
+}
+
+// =====================================================
+// INIT
+// =====================================================
+
+fetchData();
+refreshTimer = setInterval(fetchData, REFRESH_INTERVAL);
+
+// Ticker rotation
+setInterval(function() {
+  if (lastData) renderTicker(lastData);
+}, 3000);
+</script>
+</body>
+</html>

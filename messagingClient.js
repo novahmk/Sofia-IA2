@@ -1,156 +1,186 @@
 /**
- * Messaging Client — Camada de abstração para envio/recebimento de mensagens
- * 
- * Substitui a Z-API. Implemente os métodos abaixo com sua nova API de WhatsApp.
- * Todos os métodos seguem a mesma interface que o resto do sistema espera.
- * 
- * Para integrar sua nova API:
- *   1. Configure as variáveis de ambiente necessárias no .env
- *   2. Implemente os métodos sendMessage(), sendTyping(), stopTyping(), getStatus()
- *   3. Pronto — o resto do sistema já funciona automaticamente
+ * Messaging Client — Camada de abstração para envio/recebimento de mensagens via UAZAPI
+ * Docs: https://docs.uazapi.com
  */
 
 const https = require('https');
 
 class MessagingClient {
     constructor() {
-        this.accountSid = process.env.TWILIO_ACCOUNT_SID || '';
-        this.authToken = process.env.TWILIO_AUTH_TOKEN || '';
-        this.phoneNumber = process.env.TWILIO_PHONE_NUMBER || '';
-        this.baseUrl = this.accountSid
-            ? `https://api.twilio.com/2010-04-01/Accounts/${this.accountSid}`
-            : null;
+        this.token = process.env.UAZAPI_TOKEN || '';
+        this.baseUrl = (process.env.UAZAPI_BASE_URL || 'https://free.uazapi.com').replace(/\/$/, '');
+        this._parsedUrl = null;
 
-        console.log(`📡 Messaging Client inicializado (${this.isConfigured() ? 'Twilio configurado' : 'Twilio não configurado'})`);
+        try {
+            this._parsedUrl = new URL(this.baseUrl);
+        } catch (e) {
+            console.error('❌ UAZAPI_BASE_URL inválida:', this.baseUrl);
+        }
+
+        console.log(`📡 Messaging Client inicializado (${this.isConfigured() ? 'UAZAPI configurado — ' + this.baseUrl : 'UAZAPI não configurado'})`);
     }
 
     isConfigured() {
-        return Boolean(this.accountSid && this.authToken && this.phoneNumber);
+        return Boolean(this.token && this._parsedUrl);
     }
 
+    /**
+     * Normaliza número de telefone para formato UAZAPI (apenas dígitos)
+     */
     normalizePhoneNumber(phoneNumber) {
-        const normalized = String(phoneNumber || '')
+        return String(phoneNumber || '')
             .replace(/^whatsapp:/, '')
-            .replace(/[\s()-]/g, '')
+            .replace(/[^0-9]/g, '')
             .trim();
-
-        if (!normalized) return '';
-        return normalized.startsWith('+') ? normalized : `+${normalized}`;
     }
 
-    requestTwilio(method, endpoint, formBody = null) {
+    /**
+     * Faz request HTTPS genérica para a UAZAPI
+     */
+    _request(method, path, body = null) {
         return new Promise((resolve, reject) => {
-            if (!this.baseUrl) {
-                reject(new Error('Twilio não configurado'));
+            if (!this.isConfigured()) {
+                reject(new Error('UAZAPI não configurado. Defina UAZAPI_TOKEN e UAZAPI_BASE_URL.'));
                 return;
             }
 
-            const url = new URL(`${this.baseUrl}${endpoint}`);
+            const url = new URL(path, this.baseUrl);
             const headers = {
-                Authorization: `Basic ${Buffer.from(`${this.accountSid}:${this.authToken}`).toString('base64')}`,
+                'token': this.token,
             };
 
-            if (formBody) {
-                headers['Content-Type'] = 'application/x-www-form-urlencoded';
-                headers['Content-Length'] = Buffer.byteLength(formBody);
+            let postData = null;
+            if (body) {
+                postData = JSON.stringify(body);
+                headers['Content-Type'] = 'application/json';
+                headers['Content-Length'] = Buffer.byteLength(postData);
             }
 
-            const req = https.request(url, { method, headers }, (res) => {
+            const options = {
+                hostname: url.hostname,
+                port: url.port || (url.protocol === 'https:' ? 443 : 80),
+                path: url.pathname + url.search,
+                method,
+                headers,
+            };
+
+            const protocol = url.protocol === 'https:' ? https : require('http');
+            const req = protocol.request(options, (res) => {
                 let responseBody = '';
                 res.setEncoding('utf8');
                 res.on('data', chunk => { responseBody += chunk; });
                 res.on('end', () => {
-                    let parsedBody = responseBody;
-
-                    try {
-                        parsedBody = responseBody ? JSON.parse(responseBody) : {};
-                    } catch (error) {
-                        // Twilio retorna JSON na API usada aqui; se falhar, preservar body bruto.
-                    }
+                    let parsed = responseBody;
+                    try { parsed = responseBody ? JSON.parse(responseBody) : {}; } catch (e) {}
 
                     if (res.statusCode >= 200 && res.statusCode < 300) {
-                        resolve(parsedBody);
-                        return;
+                        resolve(parsed);
+                    } else {
+                        const msg = typeof parsed === 'object'
+                            ? parsed.error || parsed.message || JSON.stringify(parsed)
+                            : responseBody;
+                        reject(new Error(`UAZAPI HTTP ${res.statusCode}: ${msg}`));
                     }
-
-                    const errorMessage = typeof parsedBody === 'object'
-                        ? parsedBody.message || JSON.stringify(parsedBody)
-                        : responseBody;
-                    reject(new Error(`Twilio HTTP ${res.statusCode}: ${errorMessage}`));
                 });
             });
 
             req.on('error', reject);
+            req.setTimeout(15000, () => { req.destroy(); reject(new Error('UAZAPI timeout (15s)')); });
 
-            if (formBody) {
-                req.write(formBody);
-            }
-
+            if (postData) req.write(postData);
             req.end();
         });
     }
 
     /**
-     * Envia mensagem de texto para um número
-     * @param {string} phoneNumber - Número no formato internacional (ex: 5511999999999)
-     * @param {string} message - Texto da mensagem
+     * Envia mensagem de texto via UAZAPI
      */
     async sendMessage(phoneNumber, message) {
         if (!this.isConfigured()) {
-            console.warn('⚠️ Twilio não configurado. Mensagem não enviada. Defina TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN e TWILIO_PHONE_NUMBER.');
-            return { queued: false, reason: 'twilio_not_configured' };
+            console.warn('⚠️ UAZAPI não configurado. Mensagem não enviada.');
+            return { queued: false, reason: 'uazapi_not_configured' };
         }
 
-        const to = this.normalizePhoneNumber(phoneNumber);
-        const from = this.normalizePhoneNumber(this.phoneNumber);
-        const formBody = new URLSearchParams({
-            From: `whatsapp:${from}`,
-            To: `whatsapp:${to}`,
-            Body: message,
-        }).toString();
+        const phone = this.normalizePhoneNumber(phoneNumber);
+        const response = await this._request('POST', '/send/text', {
+            phone,
+            chatId: `${phone}@s.whatsapp.net`,
+            message,
+        });
 
-        const response = await this.requestTwilio('POST', '/Messages.json', formBody);
-        console.log(`📤 [MessagingClient] Mensagem para ${phoneNumber}: "${message.substring(0, 80)}..."`);
+        console.log(`📤 [UAZAPI] Mensagem para ${phone}: "${message.substring(0, 80)}..."`);
         return response;
     }
 
     /**
-     * Envia indicador de "digitando..." para um número
-     * @param {string} phoneNumber
+     * Simula "digitando..." — UAZAPI não suporta este endpoint no free
      */
     async sendTyping(phoneNumber) {
-        // Twilio WhatsApp não expõe typing indicator para esta integração.
+        // UAZAPI free não tem endpoint de presença
         return { supported: false, phoneNumber };
     }
 
     /**
-     * Para o indicador de "digitando..."
-     * @param {string} phoneNumber
+     * Para de "digitar" — UAZAPI não suporta no free
      */
     async stopTyping(phoneNumber) {
-        // No-op: Twilio WhatsApp não expõe typing indicator para esta integração.
         return { supported: false, phoneNumber };
     }
 
     /**
-     * Verifica o status da conexão com a API
-     * @returns {object} Status da conexão
+     * Verifica status da instância UAZAPI (validação REAL)
      */
     async getStatus() {
         if (!this.isConfigured()) {
             return {
                 connected: false,
                 configured: false,
-                message: 'Twilio não configurado. Defina TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN e TWILIO_PHONE_NUMBER.'
+                provider: 'uazapi',
+                message: 'UAZAPI não configurado. Defina UAZAPI_TOKEN e UAZAPI_BASE_URL.',
             };
         }
 
-        return {
-            connected: true,
-            configured: true,
-            provider: 'twilio',
-            phoneNumber: this.normalizePhoneNumber(this.phoneNumber),
-        };
+        try {
+            const status = await this._request('GET', '/status');
+            const instance = status.status?.checked_instance || {};
+            return {
+                connected: instance.connection_status === 'connected',
+                configured: true,
+                provider: 'uazapi',
+                instanceName: instance.name || '',
+                connectionStatus: instance.connection_status || 'unknown',
+                isHealthy: instance.is_healthy || false,
+                serverStatus: status.status?.server_status || 'unknown',
+                message: instance.message || '',
+            };
+        } catch (err) {
+            return {
+                connected: false,
+                configured: true,
+                provider: 'uazapi',
+                message: `Erro ao verificar status: ${err.message}`,
+            };
+        }
+    }
+
+    /**
+     * Retorna configuração atual do webhook
+     */
+    async getWebhookConfig() {
+        return this._request('GET', '/webhook');
+    }
+
+    /**
+     * Atualiza URL do webhook na UAZAPI
+     */
+    async setWebhook(webhookUrl) {
+        return this._request('PUT', '/webhook', {
+            url: `POST ${webhookUrl}`,
+            enabled: true,
+            events: ['messages'],
+            addUrlEvents: false,
+            addUrlTypesMessages: false,
+        });
     }
 }
 

@@ -17,22 +17,100 @@ const chatHistories = {};
 // Armazena análise de intenção por número de telefone
 const customerIntents = {};
 
-// Limite máximo de mensagens no histórico (system prompt + últimas N interações)
-const MAX_HISTORY_LENGTH = 30;
+// Armazena últimas respostas da Sofia por telefone (anti-repetição)
+const lastResponses = {};
+
+// Armazena resumos de conversas antigas por telefone
+const conversationSummaries = {};
+
+// Limite máximo de mensagens no histórico (system prompt + summary + últimas N interações)
+const MAX_HISTORY_LENGTH = 14;
+
+// Limiar para comprimir histórico (quando atinge esse nível, resume as mensagens antigas)
+const COMPRESS_THRESHOLD = 12;
 
 /**
- * Poda o histórico mantendo o system prompt e as últimas N mensagens
+ * Comprime histórico antigo em um resumo e mantém apenas mensagens recentes.
+ * Isso evita que a IA repita argumentos já feitos e reduz tokens.
  */
-function trimChatHistory(phoneNumber) {
+async function compressAndTrimHistory(phoneNumber) {
     const history = chatHistories[phoneNumber];
     if (!history || history.length <= MAX_HISTORY_LENGTH) return;
-    
-    // Manter o system prompt (primeiro item) + últimas mensagens
+
     const systemMessage = history[0];
-    const recentMessages = history.slice(-(MAX_HISTORY_LENGTH - 1));
-    chatHistories[phoneNumber] = [systemMessage, ...recentMessages];
-    
-    console.log(`🧹 Histórico podado para ${phoneNumber}: ${history.length} → ${chatHistories[phoneNumber].length} mensagens`);
+    // Pegar mensagens antigas (exceto system e as últimas 6 interações)
+    const keepRecent = 8; // últimas 8 mensagens (4 trocas)
+    const oldMessages = history.slice(1, -(keepRecent));
+    const recentMessages = history.slice(-keepRecent);
+
+    if (oldMessages.length < 4) {
+        // Pouca coisa para resumir, só faz trim simples
+        chatHistories[phoneNumber] = [systemMessage, ...recentMessages];
+        return;
+    }
+
+    try {
+        // Gerar resumo compacto das mensagens antigas
+        const summaryPrompt = oldMessages
+            .filter(m => m.role === 'user' || m.role === 'assistant')
+            .map(m => `${m.role === 'user' ? 'Cliente' : 'Sofia'}: ${(m.content || '').substring(0, 150)}`)
+            .join('\n');
+
+        const summaryResponse = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+                { role: "system", content: "Resuma esta conversa em 3-4 frases objetivas. Foque em: nome do cliente, o que ele quer, objeções levantadas, o que já foi explicado, e em que ponto a conversa parou. Seja direto." },
+                { role: "user", content: summaryPrompt }
+            ],
+            temperature: 0.3,
+            max_tokens: 150
+        });
+
+        const summary = summaryResponse.choices[0]?.message?.content || '';
+        conversationSummaries[phoneNumber] = summary;
+
+        // Reconstruir histórico: system + resumo como contexto + mensagens recentes
+        chatHistories[phoneNumber] = [
+            systemMessage,
+            { role: "user", content: `[RESUMO DA CONVERSA ANTERIOR]\n${summary}\n[FIM DO RESUMO]` },
+            { role: "assistant", content: "Entendi, vou continuar a conversa a partir daqui." },
+            ...recentMessages
+        ];
+
+        console.log(`🧠 Histórico comprimido para ${phoneNumber}: resumo gerado (${oldMessages.length} msgs antigas → 1 resumo)`);
+    } catch (error) {
+        // Fallback: trim simples se a compressão falhar
+        chatHistories[phoneNumber] = [systemMessage, ...recentMessages];
+        console.log(`🧹 Histórico podado (fallback) para ${phoneNumber}: ${history.length} → ${chatHistories[phoneNumber].length}`);
+    }
+}
+
+/**
+ * Registra resposta da Sofia para anti-repetição (mantém últimas 5)
+ */
+function trackResponse(phoneNumber, response) {
+    if (!lastResponses[phoneNumber]) {
+        lastResponses[phoneNumber] = [];
+    }
+    lastResponses[phoneNumber].push(response);
+    if (lastResponses[phoneNumber].length > 5) {
+        lastResponses[phoneNumber].shift();
+    }
+}
+
+/**
+ * Gera contexto anti-repetição baseado nas últimas respostas
+ */
+function getAntiRepetitionContext(phoneNumber) {
+    const recent = lastResponses[phoneNumber];
+    if (!recent || recent.length < 2) return '';
+
+    const recentSnippets = recent
+        .slice(-3)
+        .map(r => r.substring(0, 80))
+        .join(' | ');
+
+    return `\n[ANTI-REPETIÇÃO] Suas últimas respostas incluíram: "${recentSnippets}". NÃO repita esses mesmos pontos ou frases. Aborde de um ângulo completamente diferente.`;
 }
 
 /**
@@ -140,160 +218,64 @@ function shouldEscalateToHuman(phoneNumber, userMessage) {
 }
 
 /**
- * Prompt do Sistema formatado exatamente com as diretrizes de personalidade da Sofia
+ * System Prompt v2 — Compacto, focado em comportamento conversacional.
+ * Informações técnicas e de objeções foram movidas para o RAG (knowledgeBase).
  */
-const systemPrompt = `Você é Sofia, especialista em Terapia Capilar da Clínica Quality Hair.
+const systemPrompt = `Você é Sofia, consultora de Terapia Capilar da Clínica Quality Hair (Vila Mariana, metrô Paraíso, SP).
 
-# Persona da IA
-- Nome: Sofia
-- Função: Especialista em Terapia Capilar (Mesoterapia) da Clínica Quality Hair.
-- Tom de Voz: Natural, humanizada, persuasiva e acolhedora. Age como uma consultora que entende a dor do paciente e oferece uma solução de saúde e estética. Evita termos excessivamente técnicos, mas demonstra autoridade quando questionada sobre o procedimento.
-- Estilo: MUITO IMPORTANTE: Nunca repita as mesmas mensagens. Varie constantemente as formas de abordar o mesmo assunto. Use diferentes ângulos, exemplos e abordagens para manter a conversa natural e engajante.
+# COMO VOCÊ CONVERSA
+- Você é uma HUMANA conversando no WhatsApp, não um robô.
+- Responda em NO MÁXIMO 1-3 frases curtas (máximo 50 palavras). WhatsApp é chat, não e-mail.
+- Faça apenas UMA pergunta por mensagem.
+- NUNCA despeje informações que o cliente não pediu.
+- PRIMEIRO ouça e entenda. DEPOIS responda apenas o que foi perguntado.
+- Se o cliente disser "oi", responda com "oi" + uma pergunta curta. Nada mais.
+- Varie saudações, tom, tamanho e abordagem a cada mensagem. Nunca repita frases.
+- Use emojis com moderação (máximo 1 por mensagem, e nem sempre).
 
-# Objetivo Principal
-Converter leads interessados em Terapia Capilar (Mesoterapia) em agendamentos de Avaliação Gratuita na clínica (Vila Mariana, próximo ao metrô Paraíso, São Paulo). Qualificar o lead, gerar autoridade técnica e usar gatilhos de escassez para fechar o agendamento.
+# SEU OBJETIVO
+Levar o cliente a agendar uma Avaliação Capilar Gratuita. Mas faça isso NATURALMENTE — como uma conversa entre pessoas, não um script.
 
-# REGRAS DE OURO
-1. Personalização: Sempre use o nome do lead após ele ser fornecido.
-2. Interatividade: Faça apenas UMA pergunta por vez.
-3. Foco no Agendamento: Toda a conversa deve convergir para a avaliação presencial.
-4. Humanização: Use expressões naturais e demonstre empatia ("Entendo perfeitamente", "Sei como é").
-5. Preço: NÃO fale o preço logo de cara. O foco é o valor da avaliação.
-6. Autoridade Técnica: Use os detalhes da Mesoterapia para passar confiança, mas de forma simples.
-7. NUNCA use a mesma saudação duas vezes. Varie entre: "Oi!", "Olá!", "E aí?", "Tudo certo?", "Como vai?", etc.
-8. NUNCA faça duas perguntas iguais. Reformule frequentemente.
-9. Alterne entre abordagens diretas, narrativas e consultivas.
-10. Varie a extensão das mensagens: às vezes curtas, às vezes um pouco maiores.
+# REGRAS INVIOLÁVEIS
+1. RESPONDA O QUE O CLIENTE PERGUNTOU antes de puxar qualquer assunto.
+2. Se ele perguntou preço, responda o preço. Se perguntou horário, dê horário. Nunca desvie.
+3. Use o nome do cliente quando souber.
+4. NÃO fale preço se o cliente não perguntou. Foque na avaliação gratuita.
+5. Se o cliente disse "não" ou "vou pensar" — respeite. Uma frase empática e encerre suavemente. Não insista.
+6. Se o cliente já ouviu uma explicação (veja o RESUMO/MEMÓRIA), NÃO repita. Avance para o próximo passo.
+7. Adapte seu tom ao perfil do cliente:
+   - Direto/objetivo → respostas curtas e diretas
+   - Emocional → empatia genuína, sem forçar venda
+   - Cético → fatos e autoridade técnica, sem prometer milagres
+   - Impaciente → vá direto ao ponto, ofereça agendamento rápido
 
-# FLUXO DE ATENDIMENTO ESTRATÉGICO
+# FLUXO NATURAL (guia, não script)
+1. Conexão: Entenda a dor do cliente (queda? falhas? afinamento?)
+2. Nome: Pergunte o nome naturalmente
+3. Educação: SOMENTE quando relevante, use info do [CONTEXTO RAG] para explicar
+4. Conversão: Sugira a avaliação gratuita quando sentir abertura (não force)
 
-## 1. Abertura e Conexão (Quebra de Gelo)
-Inicie com empatia e descubra a dor:
-- "Oi! Vi que você se interessou pelo nosso tratamento capilar. O que mais tem te incomodado hoje no seu cabelo? É queda, falhas ou afinamento?"
+# O QUE VOCÊ SABE FAZER
+- Verificar horários disponíveis em tempo real no sistema Feegow (use check_available_appointments)
+- Agendar procedimentos diretamente no Feegow (use book_appointment) — precisa de nome, data e horário confirmados
+- Cancelar ou remarcar agendamentos existentes
+- Listar procedimentos com preços reais (MESOTERAPIA R$350, PRP R$300, LIMPEZA DE PELE R$320, BOTOX R$860, TRANSPLANTE CAPILAR R$10.000)
+- Consultar sua base de conhecimento para informações técnicas precisas
+- Lembrar do cliente pela memória (nome, objeções anteriores, tópicos discutidos)
 
-## 2. Captura de Nome e Perfil
-Após entender a dor:
-- "Entendi... Antes de continuarmos, posso saber seu nome pra te atender melhor?"
-Após o nome:
-- "Prazer, [Nome]! E me conta, você trabalha com o que hoje? Pergunto porque o estresse do dia a dia às vezes influencia muito na saúde dos fios."
+# AGENDAMENTO — FLUXO
+Quando o cliente quiser agendar:
+1. Confirme qual procedimento (se não souber, pergunte)
+2. Use check_available_appointments para buscar horários reais
+3. Apresente 3-5 opções de horário de forma clara
+4. Quando o cliente confirmar, use book_appointment com todos os dados
 
-## 3. Diagnóstico e Autoridade (Educação sobre Mesoterapia)
-- "Entendo perfeitamente, [Nome]. Esse tipo de situação tem grandes chances de melhorar com a Mesoterapia Capilar. É uma técnica onde aplicamos vitaminas, minerais e fatores de crescimento direto no couro cabeludo. Como os ativos vão direto na raiz, o resultado é muito superior a qualquer loção de passar em casa."
-
-## 4. Quebra de Crença (Transplante vs. Terapia)
-- "Muitas pessoas acham que a única solução é o transplante, mas com a Mesoterapia conseguimos reativar folículos que estão 'dormindo' e engrossar os fios que ficaram finos. Muitas vezes, recuperamos o volume sem precisar de cirurgia."
-
-## 5. Conversão e Escassez
-- "Para sermos assertivos, o ideal é você vir aqui na clínica para uma avaliação detalhada. Como vi seu interesse agora, consigo liberar uma avaliação gratuita para você. Temos apenas 15 vagas por semana para esse formato. Vamos agendar a sua?"
-
-# BASE DE CONHECIMENTO TÉCNICA (Mesoterapia)
-
-Use estas informações quando o paciente perguntar detalhes:
-- O que é: Microinjeções de um "coquetel" de ativos (vitaminas, biotina, minoxidil, aminoácidos) direto na derme (2 a 4mm de profundidade).
-- Dói? "A dor é mínima! Usamos agulhas ultrafinas e, se você preferir, aplicamos um anestésico tópico antes para garantir total conforto."
-- Resultados: "A redução da queda geralmente é percebida já na 2ª ou 3ª sessão. O crescimento de novos fios costuma aparecer entre 6 a 8 semanas."
-- Duração: "Cada sessão dura entre 30 a 60 minutos. É super tranquilo."
-- Benefícios: Nutrição profunda, aumento da densidade (fios mais grossos), estímulo da circulação e combate à queda genética ou por estresse.
-
-# TRATAMENTO DE OBJEÇÕES
-
-## Custo
-"Entendo sua preocupação com o investimento, [Nome]. Nosso tratamento de 6 sessões, que inclui a Mesoterapia Capilar personalizada, está em uma condição especial de 12x de R$ 159,90 ou R$ 1.899 à vista. Mas o mais importante é que esse valor é para um tratamento completo que visa resultados duradouros, com ativos de alta qualidade aplicados diretamente onde seu cabelo precisa. Faz sentido agendarmos sua avaliação gratuita para que você entenda o valor real para o seu caso?"
-
-## Número de Sessões
-"A quantidade de sessões (geralmente 6 na fase intensiva) é pensada para respeitar o ciclo de crescimento do seu cabelo, [Nome]. É um processo biológico que leva tempo para reativar os folículos e fortalecer os fios. É como regar uma planta: precisa de constância para florescer. Na avaliação, podemos detalhar o protocolo ideal para você."
-
-## Medo de Agulha
-"Entendo o receio, mas as agulhas são tão finas quanto um fio de cabelo! Além disso, o anestésico deixa o processo bem confortável. O resultado vale muito a pena."
-
-## Desconfiança
-"A Mesoterapia é uma técnica consagrada desde 1952. Diferente de produtos tópicos que a pele mal absorve, aqui entregamos o 'alimento' direto onde o cabelo nasce."
-
-## Resultados a Longo Prazo
-"A Mesoterapia Capilar não é uma solução mágica, [Nome], mas um investimento na saúde contínua do seu cabelo. Ela nutre os folículos, fortalece os fios existentes e estimula o crescimento de novos. Pense nisso como um cuidado preventivo e restaurador que evita problemas maiores no futuro, como a necessidade de um transplante. É a melhor forma de manter seu cabelo forte e saudável por muito mais tempo."
-
-## Lead Frio / "Vou pensar"
-"Olha, [Nome], a queda capilar é progressiva. Quanto mais tempo esperamos, mais folículos podem 'morrer' definitivamente. Vamos aproveitar essa vaga de avaliação gratuita?"
-
-## "Estou pesquisando"
-- OPT 1: "Ótimo! Pesquisa é importante. Que perguntas você ainda tem?"
-- OPT 2: "Faz sentido, afinal é uma decisão importante. E o que sua pesquisa mostrou até agora?"
-- OPT 3: "Pesquise bastante, mas vem pra gente tirar dúvidas em uma avaliação. Sem compromisso."
-
-# FATORES DECISIVOS DE COMPREENSÃO (Adaptação ao Perfil do Paciente)
-
-Analise o tom, as palavras e o contexto da fala do paciente para identificar seu humor e perfil, adaptando a abordagem:
-
-## Cético/Desconfiado
-Indicadores: perguntas incisivas sobre eficácia, "funciona mesmo?", "qual a prova?"
-Estratégia: Reforçar autoridade técnica (origem desde 1952, mecanismo de ação), foco na avaliação gratuita como oportunidade de ver casos reais. Ser direta e transparente.
-
-## Ansioso/Impaciente
-Indicadores: "Quero resolver logo", "quanto tempo leva?", "é rápido?"
-Estratégia: Soluções rápidas (agendamento imediato), focar nos primeiros resultados visíveis (2ª/3ª sessão), frases mais curtas e diretas.
-
-## Pragmático/Objetivo
-Indicadores: perguntas diretas sobre custo, localização, duração.
-Estratégia: Respostas curtas e diretas, direcionar rapidamente para agendamento.
-
-## Emocional/Sensível
-Indicadores: impacto na autoestima, frustração, "me sinto mal", "meu cabelo era lindo".
-Estratégia: Empatia profunda ("Sinto muito que esteja passando por isso, [Nome]."), foco na recuperação da autoestima, linguagem acolhedora.
-
-## Curioso/Técnico
-Indicadores: perguntas sobre ativos, mecanismo, contraindicações.
-Estratégia: Informações técnicas simplificadas, sempre direcionando para avaliação com especialista.
-
-## Indeciso/Pesquisando
-Indicadores: "Estou pesquisando", "vou pensar", "não tenho certeza".
-Estratégia: Valor da avaliação gratuita como passo sem compromisso, escassez suave das vagas.
-
-# LOCALIZAÇÃO
-- Local: Vila Mariana, próximo ao metrô Paraíso, São Paulo.
-
-# MENSAGEM DE ENCERRAMENTO
-"Tudo bem, [Nome]. Se mudar de ideia, me avise. Lembre-se que as vagas para avaliação gratuita são limitadas e a saúde do seu cabelo não pode esperar. Até breve!"
-
-# ESCALAÇÃO PARA HUMANO
-
-Se o cliente explicitamente pedir para falar com um humano, atendente, gerente ou similar:
-1. RECONHEÇA o pedido
-2. VALIDE: "Totalmente válido, vou te conectar com nosso time"
-3. TRANSFIRA com empatia
-
-# PRIORIZAÇÃO DO QUE O CLIENTE QUER
-
-1. Qual é a demanda REAL (não assuma, identifique)
-2. Qual é a PRIORIDADE do cliente (tom, repetição)
-3. Sempre puxe para o objetivo mas respeitando a prioridade do cliente
-
-# RECURSOS AVANÇADOS DISPONÍVEIS
-
-## 1. BASE DE CONHECIMENTO (RAG)
-Use as informações recuperadas da base de conhecimento com confiança. Nunca invente informações sobre preços ou procedimentos.
-
-## 2. FUNCTION CALLING
-- ✅ Verificar horários disponíveis (check_available_appointments)
-- ✅ Agendar consultas (book_appointment)
-- ✅ Recuperar informações de clientes (get_client_info)
-- ✅ Salvar informações do cliente (save_client_info)
-- ✅ Buscar preços atualizados (get_pricing_info)
-
-## 3. MEMÓRIA DO CLIENTE
-Você tem acesso à memória completa do cliente. USE para:
-- Cumprimentar pelo nome
-- Reconhecer tópicos anteriores
-- Não repetir explicações já dadas
-- Adaptar tom baseado no sentimento armazenado
-
-# ESTILO DE ESCRITA
-- Mensagens curtas e diretas
-- Use ocasionalmente emojis naturais (não exagere)
-- Linguagem conversacional e acessível
-- Adapte formalidade ao tom do paciente
-- Personalize com o nome quando apropriado
-
-LEMBRE-SE: O OBJETIVO É CONVERTER EM AGENDAMENTO DE AVALIAÇÃO GRATUITA. MANTENHA A CONVERSA NATURAL, FLUIDA E NUNCA REPETITIVA.`;
+# O QUE VOCÊ NÃO DEVE FAZER
+- Inventar preços, dados ou procedimentos — use apenas info da base de conhecimento
+- Mandar parágrafos longos
+- Repetir argumentos que já usou na conversa
+- Insistir depois que o cliente recusou
+- Ignorar a pergunta do cliente para puxar outro assunto`;
 async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
     // ===== A/B TESTING — atribuir variante =====
     const abVariant = abTesting.assignVariant(phoneNumber);
@@ -309,24 +291,32 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
         ];
     }
 
-    // ===== MEMÓRIA DO CLIENTE =====
+    // ===== MEMÓRIA DO CLIENTE (compacta) =====
     const clientMem = clientMemory.getClientMemory(phoneNumber);
     const memoryContext = clientMemory.createMemoryContext(phoneNumber);
     
     console.log(`👤 Cliente: ${clientMem.personal.name || 'Desconhecido'}`);
 
-    // ===== RAG - RECUPERAR DOCUMENTOS RELEVANTES =====
-    console.log(`🔍 Iniciando RAG para buscar documentos relevantes...`);
-    const relevantDocs = await knowledgeBase.retrieveRelevantDocuments(userMessage, 3);
-    const ragContext = knowledgeBase.formatDocumentsAsContext(relevantDocs);
+    // ===== RAG — Buscar APENAS se a mensagem pede informação =====
+    // Mensagens curtas (oi, ok, sim, não) não precisam de RAG
+    const msgWords = userMessage.trim().split(/\s+/).length;
+    const needsRag = msgWords > 2 || userMessage.includes('?');
+    let ragContext = '';
+    
+    if (needsRag) {
+        console.log(`🔍 RAG ativado (msg com ${msgWords} palavras)`);
+        const relevantDocs = await knowledgeBase.retrieveRelevantDocuments(userMessage, 2);
+        ragContext = knowledgeBase.formatDocumentsAsContext(relevantDocs);
+    } else {
+        console.log(`⏭️ RAG ignorado (msg curta: "${userMessage}")`);
+    }
 
     // ===== ANÁLISE DE INTENÇÃO =====
     const intent = analyzeCustomerIntent(userMessage);
     console.log(`🔍 Análise de Intenção:`, intent);
     
-    // Log de áudio se aplicável
     if (audioContext) {
-        console.log(`🎙️ CONTEXTO DE ÁUDIO DETECTADO - Sofia vai responder com mais empatia`);
+        console.log(`🎙️ CONTEXTO DE ÁUDIO DETECTADO`);
     }
 
     // ===== VERIFICAR ESCALAÇÃO =====
@@ -335,11 +325,10 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
         console.log(`🚨 ESCALAÇÃO DETECTADA - Razão: ${escalation.reason} | Prioridade: ${escalation.priority}`);
         
         const escalationMessages = [
-            `Entendo que você prefira falar com uma pessoa mesmo. Vou conectá-lo com nosso time agora! 👋 Aguarde um momento...`,
-            `Tudo bem, vou te conectar com um atendente. Só um segundo! 📱`,
-            `Gotcha! Transferindo você agora... 🤝`,
-            `Deixa eu te colocar com a galera aqui que pode ajudar! Transferindo...`,
-            `Perfeito, conectando agora... ⏳`
+            `Entendo! Vou te conectar com nosso time agora. Aguarda um momento 👋`,
+            `Tudo bem, te conecto com um atendente. Só um segundo!`,
+            `Claro, transferindo você agora...`,
+            `Perfeito, conectando com a equipe...`
         ];
 
         const randomEscalation = escalationMessages[Math.floor(Math.random() * escalationMessages.length)];
@@ -347,35 +336,61 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
         return randomEscalation;
     }
 
-    // ===== PREPARAR MENSAGEM COM CONTEXTOS =====
-    const fullUserMessage = [
-        memoryContext,
-        ragContext,
-        audioContext || '',
-        `Cliente: ${userMessage}`
-    ].filter(ctx => ctx).join('\n\n');
+    // ===== ANTI-REPETIÇÃO =====
+    const antiRepetition = getAntiRepetitionContext(phoneNumber);
 
-    // Adiciona a mensagem do usuário ao histórico
+    // ===== PREPARAR MENSAGEM — Contexto enxuto =====
+    const contextParts = [];
+    
+    // Memória: apenas se tem info útil (não envia bloco vazio)
+    if (memoryContext && memoryContext.trim().length > 20) {
+        contextParts.push(memoryContext);
+    }
+    
+    // RAG: apenas se encontrou docs relevantes
+    if (ragContext && ragContext.trim().length > 10) {
+        contextParts.push(ragContext);
+    }
+    
+    // Áudio: se houver
+    if (audioContext) {
+        contextParts.push(audioContext);
+    }
+    
+    // Anti-repetição
+    if (antiRepetition) {
+        contextParts.push(antiRepetition);
+    }
+
+    // Montar mensagem final — contexto vai ANTES, mensagem do cliente vai separada e clara
+    let fullUserMessage;
+    if (contextParts.length > 0) {
+        fullUserMessage = contextParts.join('\n') + `\n\nMensagem do cliente: ${userMessage}`;
+    } else {
+        fullUserMessage = userMessage;
+    }
+
+    // Adiciona ao histórico
     chatHistories[phoneNumber].push({ 
         role: "user", 
         content: fullUserMessage
     });
     
-    console.log(`💬 Processando mensagem com RAG + Memória + Audio...`);
+    console.log(`💬 Processando (contextos: ${contextParts.length}, RAG: ${needsRag})...`);
 
     try {
         const requestStartTime = Date.now();
 
-        // Validar API key
         if (!process.env.OPENAI_API_KEY) {
             throw new Error('OPENAI_API_KEY não está configurada no .env');
         }
 
-        console.log(`🔄 Chamando OpenAI API com Function Calling habilitado...`);
+        // ===== CHAMADA PRINCIPAL — Temperatura e tokens otimizados =====
+        const aiTemperature = abOverrides.temperature || 0.6;
+        const aiMaxTokens = abOverrides.maxTokens || 130;
+        
+        console.log(`🔄 OpenAI API (temp=${aiTemperature}, max_tokens=${aiMaxTokens})...`);
 
-        // ===== CHAMADA COM FUNCTION CALLING (com self-healing) =====
-        const aiTemperature = abOverrides.temperature || 0.95;
-        const aiMaxTokens = abOverrides.maxTokens || 300;
         const response = await selfHealing.execute(
             () => openai.chat.completions.create({
                 model: "gpt-4o",
@@ -476,18 +491,31 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
             chatHistories[phoneNumber].push({ role: "assistant", content: sofiaMessage });
         }
 
-        // Podar histórico para evitar crescimento infinito
-        trimChatHistory(phoneNumber);
+        // ===== COMPRESSÃO INTELIGENTE DO HISTÓRICO =====
+        await compressAndTrimHistory(phoneNumber);
+
+        // ===== ANTI-REPETIÇÃO: Registrar resposta =====
+        trackResponse(phoneNumber, sofiaMessage);
 
         // ===== ATUALIZAR MEMÓRIA DO CLIENTE =====
         console.log(`📝 Atualizando memória do cliente...`);
         
         // Registrar tópicos discutidos
-        if (userMessage.toLowerCase().includes('prec') || userMessage.toLowerCase().includes('cust')) {
+        const lowerMsg = userMessage.toLowerCase();
+        if (lowerMsg.includes('prec') || lowerMsg.includes('cust') || lowerMsg.includes('valor') || lowerMsg.includes('quanto')) {
             clientMemory.recordTopicDiscussed(phoneNumber, 'preços_custos');
         }
-        if (userMessage.toLowerCase().includes('calvic') || userMessage.toLowerCase().includes('alopec')) {
+        if (lowerMsg.includes('calvic') || lowerMsg.includes('alopec') || lowerMsg.includes('queda') || lowerMsg.includes('cabelo')) {
             clientMemory.recordTopicDiscussed(phoneNumber, 'saúde_capilar');
+        }
+        if (lowerMsg.includes('mesoterap') || lowerMsg.includes('procedimento') || lowerMsg.includes('como funciona')) {
+            clientMemory.recordTopicDiscussed(phoneNumber, 'mesoterapia_explicação');
+        }
+        if (lowerMsg.includes('agend') || lowerMsg.includes('horár') || lowerMsg.includes('marc')) {
+            clientMemory.recordTopicDiscussed(phoneNumber, 'agendamento');
+        }
+        if (lowerMsg.includes('dói') || lowerMsg.includes('dor') || lowerMsg.includes('agulha') || lowerMsg.includes('medo')) {
+            clientMemory.recordTopicDiscussed(phoneNumber, 'medo_dor');
         }
         
         // Registrar perguntas

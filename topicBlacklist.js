@@ -10,7 +10,7 @@ const DEFAULT_BLACKLIST = [
     { pattern: /\b(hair\s*brasil|implachair|spamedica|bernstein|bosley|artas)\b/i, topic: 'concorrentes', response: 'Prefiro não comentar sobre outras clínicas. Posso te contar sobre o que a Quality Hair oferece?' },
 
     // Política e religião
-    { pattern: /\b(pol[ií]tic[oa]|partido|elei[çc][ãa]o|candidat|voto|presidente|governador|bolsonaro|lula|religi[ãa]o|igreja|deus|bíblia|cor[ãa]o)\b/i, topic: 'política_religião', response: 'Esse é um assunto fora da minha área. Posso te ajudar com algo sobre transplante capilar?' },
+    { pattern: /\b(pol[ií]tic[oa]|partido|elei[çc][ãa]o|candidat|voto|presidente|governador|bolsonaro|lula|religi[ãa]o|igreja|deus|bíblia|cor[ãa]o)\b/i, topic: 'política_religião', response: 'Esse é um assunto fora da minha área. Posso te ajudar com algo sobre terapia capilar?' },
 
     // Receitas médicas e medicamentos controlados
     { pattern: /\b(receit[ae]\s+m[ée]dic|prescrever|prescri[çc]|minoxidil\s+dose|finasterida\s+dose|dutasterida|dosagem|mg\s+por\s+dia)\b/i, topic: 'prescrição_médica', response: 'Não posso prescrever medicamentos. Esse tipo de orientação deve vir do médico na consulta. Posso te ajudar a agendar?' },
@@ -19,10 +19,10 @@ const DEFAULT_BLACKLIST = [
     { pattern: /\b(dados?\s+de\s+outro|informa[çc][ãa]o\s+de\s+outro|quem\s+mais|outro\s+paciente|lista\s+de\s+client)\b/i, topic: 'dados_terceiros', response: 'Não posso compartilhar informações de outros pacientes por questões de privacidade (LGPD).' },
 
     // Procedimentos que a clínica não faz
-    { pattern: /\b(botox|lipoaspira|rinoplast|silicone|abdominoplast|bariátrica|bichectomia)\b/i, topic: 'procedimentos_não_oferecidos', response: 'A Quality Hair é especializada em transplante capilar. Esse procedimento não faz parte dos nossos serviços. Posso te ajudar com algo sobre cabelos?' },
+    { pattern: /\b(botox|lipoaspira|rinoplast|silicone|abdominoplast|bariátrica|bichectomia)\b/i, topic: 'procedimentos_não_oferecidos', response: 'A Quality Hair é especializada em terapia capilar. Esse procedimento não faz parte dos nossos serviços. Posso te ajudar com algo sobre cabelos?' },
 
     // Conteúdo inapropriado
-    { pattern: /\b(sex[uo]|porn|nud|drogas?\b|maconha|cocaína|trafic)\b/i, topic: 'conteúdo_inapropriado', response: 'Esse assunto está fora do que posso ajudar. Estou aqui para tirar dúvidas sobre transplante capilar.' }
+    { pattern: /\b(sex[uo]|porn|nud|drogas?\b|maconha|cocaína|trafic)\b/i, topic: 'conteúdo_inapropriado', response: 'Esse assunto está fora do que posso ajudar. Estou aqui para tirar dúvidas sobre terapia capilar.' }
 ];
 
 class TopicBlacklist {

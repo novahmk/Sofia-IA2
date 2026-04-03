@@ -17,17 +17,15 @@ class ABTesting {
                 maxTokensOverride: null
             },
             B: {
-                name: 'Direta e Objetiva',
+                name: 'Ultra-Direta',
                 active: true,
                 promptPatch: `
-INSTRUÇÕES ADICIONAIS (Variante B — Teste A/B):
-- Seja mais DIRETA e objetiva nas respostas.
-- Respostas mais curtas (máximo 3 frases por mensagem).
-- Vá direto ao ponto sem rodeios.
-- Menos emojis, mais foco em informação.
-- Puxe para agendamento mais cedo na conversa.`,
-                temperatureOverride: 0.8,
-                maxTokensOverride: 200
+INSTRUÇÕES ADICIONAIS (Variante B):
+- Máximo 2 frases por mensagem.
+- Zero rodeios. Responda e pergunte.
+- Puxe para agendamento mais cedo.`,
+                temperatureOverride: 0.5,
+                maxTokensOverride: 100
             }
         };
 

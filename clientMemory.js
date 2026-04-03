@@ -283,58 +283,40 @@ class ClientMemory {
     createMemoryContext(phoneNumber) {
         const memory = this.getClientMemory(phoneNumber);
 
-        if (!memory.personal.name) {
-            return ''; // Sem memória conhecida
+        if (!memory.personal.name && memory.conversation.topics_discussed.length === 0) {
+            return ''; // Sem memória útil
         }
 
         const parts = [];
 
-        // Informações pessoais
+        // Essencial: nome
         if (memory.personal.name) {
-            parts.push(`Nome do cliente: ${memory.personal.name}`);
-            if (memory.personal.location) {
-                parts.push(`Localização: ${memory.personal.location}`);
-            }
+            parts.push(`Nome: ${memory.personal.name}`);
         }
 
         // Saúde capilar
-        if (memory.hair_health.baldness_degree) {
-            parts.push(`Grau de calvície (escala Norwood): ${memory.hair_health.baldness_degree}`);
-        }
-
         if (memory.hair_health.concerns.length > 0) {
-            parts.push(`Principais preocupações: ${memory.hair_health.concerns.join(', ')}`);
+            parts.push(`Preocupações: ${memory.hair_health.concerns.join(', ')}`);
         }
 
-        // Histórico  
+        // Tópicos já cobertos (CRÍTICO para anti-repetição)
         if (memory.conversation.topics_discussed.length > 0) {
-            parts.push(`Já discutimos sobre: ${memory.conversation.topics_discussed.join(', ')}`);
+            parts.push(`Já discutido: ${memory.conversation.topics_discussed.join(', ')}`);
         }
 
-        // Objeções
+        // Objeções (importante para não repetir argumentos)
         if (memory.conversation.objections.length > 0) {
-            parts.push(`Objeções anteriores: ${memory.conversation.objections.join(', ')}`);
+            parts.push(`Objeções: ${memory.conversation.objections.join(', ')}`);
         }
 
         // Próximo passo
         if (memory.next_step) {
-            parts.push(`Próximo passo combinado: ${memory.next_step}`);
-        }
-
-        // Sentimento
-        if (memory.sentiment !== 'neutral') {
-            parts.push(`Sentimento geral: ${memory.sentiment}`);
+            parts.push(`Próximo passo: ${memory.next_step}`);
         }
 
         if (parts.length === 0) return '';
 
-        return `
-[MEMÓRIA DO CLIENTE]
-${parts.join('\n')}
-
-💡 Use essas informações para personalizar sua resposta e mostrar que você reconhece o cliente.
-[FIM DA MEMÓRIA]
-`;
+        return `[MEMÓRIA] ${parts.join(' | ')}`;
     }
 
     // ===== LGPD — Lei Geral de Proteção de Dados =====
