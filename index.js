@@ -480,6 +480,60 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // Endpoint genérico para receber mensagens de qualquer sistema
+    if (req.method === 'POST' && req.url === '/api/messages') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+            try {
+                const { phone, message } = JSON.parse(body);
+
+                if (!phone || !message) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Campos obrigatórios: "phone" e "message"' }));
+                    return;
+                }
+
+                // Limpar número de telefone (remover caracteres não-dígitos)
+                const cleanPhone = String(phone).replace(/\D/g, '');
+
+                if (!cleanPhone) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Número de telefone inválido' }));
+                    return;
+                }
+
+                console.log(`\n📩 /api/messages recebido de ${cleanPhone}: ${message}`);
+
+                const webhookData = {
+                    phone: cleanPhone,
+                    fromMe: false,
+                    isGroup: false,
+                    text: { message: String(message), body: String(message) }
+                };
+
+                processIncomingMessage(webhookData);
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    message: 'Mensagem recebida e processada',
+                    phone: cleanPhone
+                }));
+            } catch (e) {
+                if (e instanceof SyntaxError) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'JSON inválido no corpo da requisição' }));
+                } else {
+                    console.error('❌ Erro em /api/messages:', e.message);
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Erro interno ao processar mensagem' }));
+                }
+            }
+        });
+        return;
+    }
+
     // Rota não encontrada
     res.writeHead(404);
     res.end('Not Found');
@@ -512,6 +566,7 @@ async function start() {
     server.listen(WEBHOOK_PORT, () => {
         console.log(`\n🌐 Webhook server rodando na porta ${WEBHOOK_PORT}`);
         console.log(`   POST http://localhost:${WEBHOOK_PORT}/webhook`);
+        console.log(`   POST http://localhost:${WEBHOOK_PORT}/api/messages`);
         console.log(`   GET  http://localhost:${WEBHOOK_PORT}/health`);
         console.log(`   GET  http://localhost:${WEBHOOK_PORT}/metrics`);
         console.log(`   POST http://localhost:${WEBHOOK_PORT}/lgpd/delete`);
