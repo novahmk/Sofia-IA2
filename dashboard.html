@@ -513,7 +513,7 @@ async function handleAuth(e) {
       const confirm = document.getElementById('authPwConfirm').value;
       const role = document.querySelector('.role-option.selected')?.dataset.role || 'visualizador';
       if (!name) return showAuthMsg('Informe seu nome', 'error');
-      if (password.length < 6) return showAuthMsg('Senha mínima: 6 caracteres', 'error');
+      if (password.length < 8) return showAuthMsg('Senha mínima: 8 caracteres', 'error');
       if (password !== confirm) return showAuthMsg('Senhas não conferem', 'error');
 
       const r = await fetch(CONFIG.API_BASE + '/api/auth/signup', {
@@ -585,7 +585,7 @@ function connectWebSocket() {
     state.ws.onclose = () => {
       document.getElementById('wsBadge').className = 'ws-badge ws-off';
       document.getElementById('wsBadge').textContent = 'WS OFF';
-      setTimeout(connectWebSocket, 5000);
+      if (state.token) setTimeout(connectWebSocket, 5000);
     };
     state.ws.onerror = () => {};
     state.ws.onmessage = (evt) => {

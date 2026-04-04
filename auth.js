@@ -1,13 +1,15 @@
 /**
  * auth.js — Autenticação JWT para o dashboard
  * Suporta signup, login, verificação de token e middleware de autenticação.
- * Armazena usuários em memória (com fallback para arquivo JSON).
+ * Armazena usuários em memória + persiste no PostgreSQL (Railway).
+ * Fallback para arquivo JSON apenas quando DATABASE_URL não está configurada.
  */
 
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const fs = require('fs');
 const path = require('path');
+const { Pool } = require('pg');
 
 const USERS_FILE = path.join(__dirname, 'dashboard_users.json');
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
@@ -16,12 +18,61 @@ const JWT_EXPIRY = '8h';
 // Roles: admin (tudo), atendente (sem segurança/AB), visualizador (somente leitura)
 const VALID_ROLES = ['admin', 'atendente', 'visualizador'];
 
-let users = loadUsers();
+// PostgreSQL pool (reutiliza DATABASE_URL do Railway)
+const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
+const pool = hasDatabaseUrl
+    ? new Pool({
+        connectionString: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false },
+        max: 3,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 5000,
+    })
+    : null;
 
-function loadUsers() {
+let users = [];
+
+// Inicialização: cria tabela + hidrata cache
+const authReady = (async () => {
+    if (pool) {
+        try {
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS dashboard_users (
+                    id TEXT PRIMARY KEY,
+                    email TEXT UNIQUE NOT NULL,
+                    name TEXT NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    salt TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'visualizador',
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            `);
+            const { rows } = await pool.query('SELECT * FROM dashboard_users');
+            users = rows.map(r => ({
+                id: r.id,
+                name: r.name,
+                email: r.email,
+                passwordHash: r.password_hash,
+                salt: r.salt,
+                role: r.role,
+                createdAt: r.created_at,
+            }));
+            console.log(`🔐 Auth: ${users.length} usuário(s) carregado(s) do PostgreSQL`);
+        } catch (e) {
+            console.error('❌ Auth: Falha ao hidratar usuários do PostgreSQL:', e.message);
+            users = loadUsersFromFile();
+        }
+    } else {
+        users = loadUsersFromFile();
+    }
+})();
+
+function loadUsersFromFile() {
     try {
         if (fs.existsSync(USERS_FILE)) {
-            return JSON.parse(fs.readFileSync(USERS_FILE, 'utf-8'));
+            const loaded = JSON.parse(fs.readFileSync(USERS_FILE, 'utf-8'));
+            console.log(`🔐 Auth: ${loaded.length} usuário(s) carregado(s) do arquivo local`);
+            return loaded;
         }
     } catch (e) {
         console.warn('⚠️ Erro ao carregar usuários do dashboard:', e.message);
@@ -30,11 +81,26 @@ function loadUsers() {
 }
 
 function saveUsers() {
+    // Salva no arquivo local (fallback/dev)
     try {
         fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
     } catch (e) {
-        console.error('❌ Erro ao salvar usuários:', e.message);
+        console.error('❌ Erro ao salvar usuários no arquivo:', e.message);
     }
+}
+
+function persistUserToDb(user) {
+    if (!pool) return;
+    pool.query(
+        `INSERT INTO dashboard_users (id, email, name, password_hash, salt, role, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (email) DO UPDATE SET
+           name = EXCLUDED.name,
+           password_hash = EXCLUDED.password_hash,
+           salt = EXCLUDED.salt,
+           role = EXCLUDED.role`,
+        [user.id, user.email, user.name, user.passwordHash, user.salt, user.role, user.createdAt]
+    ).catch(e => console.error('❌ Auth: Erro ao persistir usuário no PostgreSQL:', e.message));
 }
 
 function hashPassword(password, salt) {
@@ -75,6 +141,7 @@ function signup({ name, email, password, role }) {
     };
     users.push(user);
     saveUsers();
+    persistUserToDb(user);
     return { success: true, user: { id: user.id, name: user.name, email: user.email, role: user.role } };
 }
 
@@ -148,4 +215,4 @@ function hasPermission(role, route) {
     return false;
 }
 
-module.exports = { signup, login, verifyToken, authenticate, hasPermission, JWT_SECRET };
+module.exports = { signup, login, verifyToken, authenticate, hasPermission, JWT_SECRET, authReady };

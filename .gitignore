@@ -10,6 +10,7 @@ conversation_states.json
 appointments.json
 clients_data.json
 knowledge_base.json
+dashboard_users.json
 
 # Banco de dados SQLite
 sofia.db
@@ -34,3 +35,4 @@ google-credentials.json
 # OS
 .DS_Store
 Thumbs.db
+dashboard.html.bak

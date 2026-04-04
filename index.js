@@ -992,6 +992,13 @@ async function start() {
 
     // Verificar status do cliente de mensagens
     try {
+        await auth.authReady;
+        console.log('🔐 Auth: Sistema de autenticação inicializado');
+    } catch (err) {
+        console.warn('⚠️ Auth: Falha ao inicializar autenticação:', err.message);
+    }
+
+    try {
         const status = await messaging.getStatus();
         console.log('📱 Status Messaging:', JSON.stringify(status));
     } catch (err) {
