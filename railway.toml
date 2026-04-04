@@ -90,6 +90,37 @@
 # - Não há build step — é Node.js puro sem transpilação
 # ============================================================
 
+# ============================================================
+# SERVIÇO DE ANALYTICS (analytics-dashboard.js)
+# ─────────────────────────────────────────────────────────────
+# Para rodar o dashboard analítico como serviço separado no Railway,
+# crie um novo serviço apontando para este repositório e configure:
+#
+#   Start Command : node analytics-dashboard.js
+#   Health Check  : /health
+#   Porta         : ANALYTICS_PORT=4000 (ou PORT, definido pelo Railway)
+#
+# Variáveis de ambiente adicionais para o serviço de analytics:
+#   SOFIA_API_URL         → URL da API principal (ex: https://sofia-ia2-production.up.railway.app)
+#   ANALYTICS_JWT_TOKEN   → JWT válido para autenticar nas rotas /api/dashboard/*
+#   DATABASE_URL          → Mesma string de conexão PostgreSQL do serviço principal
+#   ANALYTICS_PORT        → Porta do servidor de analytics (padrão: 4000)
+#
+# Endpoints expostos pelo analytics-dashboard.js:
+#   GET  /                        → Interface web (analytics-ui.html)
+#   GET  /health                  → Health check do serviço de analytics
+#   GET  /api/snapshot            → Snapshot mais recente das métricas
+#   GET  /api/history?hours=24    → Histórico de snapshots (PostgreSQL)
+#   GET  /api/timeseries?metric=X → Série temporal de uma métrica específica
+#   GET  /api/trends              → Tendências das métricas principais
+#   GET  /api/anomalies           → Anomalias detectadas via Z-score
+#   GET  /api/stats?hours=24      → Estatísticas agregadas do período
+#   WS   /ws                      → WebSocket para push de atualizações (10s)
+#
+# Tabela criada automaticamente no PostgreSQL:
+#   analytics_snapshots (id, captured_at, metrics JSONB)
+# ============================================================
+
 [build]
 builder = "NIXPACKS"
 
