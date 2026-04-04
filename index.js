@@ -1,3 +1,36 @@
+/**
+ * SOFIA IA — Servidor Principal
+ * ═══════════════════════════════════════════════════════════════
+ * 
+ * Servidor HTTP nativo Node.js (sem Express) que opera como:
+ *   1. Webhook receiver para WhatsApp via UAZAPI
+ *   2. API REST com JWT auth para dashboard administrativo  
+ *   3. WebSocket server para real-time dashboard updates
+ *   4. Motor de IA conversacional (GPT-4o-mini)
+ * 
+ * PADRÃO DE ROTAS:
+ *   Todas as rotas estão neste arquivo, no callback de http.createServer.
+ *   O callback é async: async (req, res) => { ... }
+ *   Cada rota segue o padrão:
+ *     if (req.method === 'GET' && req.url === '/path') { ... return; }
+ * 
+ * AUTENTICAÇÃO:
+ *   Rotas /api/dashboard/* requerem header Authorization: Bearer <JWT>
+ *   auth.authenticate(req, res) retorna {id, email, role} ou envia 401
+ * 
+ * WEBSOCKET:
+ *   wsManager.init(server) no start() — path: /ws/dashboard?token=JWT
+ * 
+ * PORTA:
+ *   process.env.PORT (Railway injeta) || process.env.WEBHOOK_PORT || 3000
+ * 
+ * DEPLOY:
+ *   Railway auto-deploy via push no GitHub main branch
+ *   Nixpacks detecta Node.js → npm install → Procfile: node index.js
+ *   Health check: GET /health → {"status":"ok"}
+ * 
+ * ═══════════════════════════════════════════════════════════════
+ */
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const http = require('http');
