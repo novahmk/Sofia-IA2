@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sofia IA — Analytics Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d1117;
+      --surface:   #161b22;
+      --surface2:  #21262d;
+      --border:    #30363d;
+      --text:      #e6edf3;
+      --muted:     #8b949e;
+      --accent:    #58a6ff;
+      --green:     #3fb950;
+      --yellow:    #d29922;
+      --red:       #f85149;
+      --purple:    #bc8cff;
+      --orange:    #ffa657;
+      --radius:    10px;
+      --shadow:    0 4px 24px rgba(0,0,0,.4);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* ── Header ───────────────────────────────────────────── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .header-left { display: flex; align-items: center; gap: 12px; }
+    .logo { font-size: 20px; font-weight: 700; color: var(--accent); letter-spacing: -.5px; }
+    .logo span { color: var(--text); font-weight: 400; }
+    .badge {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 2px 10px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .header-right { display: flex; align-items: center; gap: 16px; }
+    #status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--muted);
+      display: inline-block;
+      transition: background .3s;
+    }
+    #status-dot.online  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    #status-dot.offline { background: var(--red);   box-shadow: 0 0 6px var(--red); }
+    #status-text { font-size: 12px; color: var(--muted); }
+    #last-update { font-size: 11px; color: var(--muted); }
+
+    /* ── Layout ───────────────────────────────────────────── */
+    main { padding: 24px; max-width: 1600px; margin: 0 auto; }
+
+    /* ── Alerts ───────────────────────────────────────────── */
+    #alerts-container { margin-bottom: 20px; display: flex; flex-direction: column; gap: 8px; }
+    .alert {
+      padding: 10px 16px;
+      border-radius: var(--radius);
+      border-left: 4px solid;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      animation: slideIn .3s ease;
+    }
+    .alert.warning  { background: rgba(210,153,34,.12); border-color: var(--yellow); color: var(--yellow); }
+    .alert.critical { background: rgba(248,81,73,.12);  border-color: var(--red);    color: var(--red); }
+    .alert.info     { background: rgba(88,166,255,.12); border-color: var(--accent); color: var(--accent); }
+    @keyframes slideIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:none; } }
+
+    /* ── KPI Cards ────────────────────────────────────────── */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .kpi-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      transition: border-color .2s, transform .2s;
+      position: relative;
+      overflow: hidden;
+    }
+    .kpi-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+    .kpi-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: var(--accent);
+      opacity: 0;
+      transition: opacity .2s;
+    }
+    .kpi-card:hover::before { opacity: 1; }
+
+    .kpi-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px; }
+    .kpi-value { font-size: 28px; font-weight: 700; color: var(--text); line-height: 1; }
+    .kpi-sub   { font-size: 11px; color: var(--muted); margin-top: 6px; }
+    .kpi-trend { font-size: 11px; margin-top: 4px; display: flex; align-items: center; gap: 4px; }
+    .kpi-trend.up     { color: var(--green); }
+    .kpi-trend.down   { color: var(--red); }
+    .kpi-trend.stable { color: var(--muted); }
+
+    /* ── Charts Grid ──────────────────────────────────────── */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+
+    .chart-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    .chart-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .chart-title .chart-meta { font-size: 11px; color: var(--muted); font-weight: 400; }
+    .chart-wrap { position: relative; height: 220px; }
+
+    /* ── Tables ───────────────────────────────────────────── */
+    .tables-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+
+    .table-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .table-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .table-count {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 1px 8px;
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 400;
+    }
+
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      padding: 10px 16px;
+      text-align: left;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface2);
+    }
+    td {
+      padding: 10px 16px;
+      font-size: 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--surface2); }
+
+    .empty-row td { text-align: center; color: var(--muted); padding: 24px; }
+
+    /* ── Badges ───────────────────────────────────────────── */
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .4px;
+    }
+    .pill-green  { background: rgba(63,185,80,.15);  color: var(--green); }
+    .pill-yellow { background: rgba(210,153,34,.15); color: var(--yellow); }
+    .pill-red    { background: rgba(248,81,73,.15);  color: var(--red); }
+    .pill-blue   { background: rgba(88,166,255,.15); color: var(--accent); }
+    .pill-purple { background: rgba(188,140,255,.15);color: var(--purple); }
+    .pill-muted  { background: var(--surface2);      color: var(--muted); }
+
+    /* ── Funnel ───────────────────────────────────────────── */
+    .funnel-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .funnel-step {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      text-align: center;
+      position: relative;
+    }
+    .funnel-step::after {
+      content: '→';
+      position: absolute;
+      right: -14px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--muted);
+      font-size: 16px;
+      z-index: 1;
+    }
+    .funnel-step:last-child::after { display: none; }
+    .funnel-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+    .funnel-value { font-size: 24px; font-weight: 700; }
+    .funnel-step:nth-child(1) .funnel-value { color: var(--accent); }
+    .funnel-step:nth-child(2) .funnel-value { color: var(--purple); }
+    .funnel-step:nth-child(3) .funnel-value { color: var(--orange); }
+    .funnel-step:nth-child(4) .funnel-value { color: var(--green); }
+
+    /* ── Section Title ────────────────────────────────────── */
+    .section-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .8px;
+      margin-bottom: 14px;
+      margin-top: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .section-title::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    /* ── Loader ───────────────────────────────────────────── */
+    #loader {
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+      gap: 16px;
+      transition: opacity .4s;
+    }
+    #loader.hidden { opacity: 0; pointer-events: none; }
+    .spinner {
+      width: 40px; height: 40px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loader p { color: var(--muted); font-size: 13px; }
+
+    /* ── Responsive ───────────────────────────────────────── */
+    @media (max-width: 768px) {
+      .charts-grid, .tables-grid { grid-template-columns: 1fr; }
+      .funnel-grid { grid-template-columns: repeat(2, 1fr); }
+      .funnel-step::after { display: none; }
+      .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Loader -->
+<div id="loader">
+  <div class="spinner"></div>
+  <p>Conectando ao Analytics Dashboard…</p>
+</div>
+
+<!-- Header -->
+<header>
+  <div class="header-left">
+    <div class="logo">Sofia <span>Analytics</span></div>
+    <div class="badge">Tempo Real</div>
+  </div>
+  <div class="header-right">
+    <span id="status-dot"></span>
+    <span id="status-text">Conectando…</span>
+    <span id="last-update">—</span>
+  </div>
+</header>
+
+<!-- Main -->
+<main>
+
+  <!-- Alerts -->
+  <div id="alerts-container"></div>
+
+  <!-- KPI Cards -->
+  <div class="section-title">📊 Métricas Principais</div>
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="kpi-label">Conversas Totais</div>
+      <div class="kpi-value" id="kpi-conversations">—</div>
+      <div class="kpi-trend stable" id="trend-conversations">—</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Sessões Ativas</div>
+      <div class="kpi-value" id="kpi-active">—</div>
+      <div class="kpi-sub" id="kpi-manual">— manuais</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Agendamentos</div>
+      <div class="kpi-value" id="kpi-appointments">—</div>
+      <div class="kpi-trend stable" id="trend-appointments">—</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Taxa de Conversão</div>
+      <div class="kpi-value" id="kpi-conversion">—</div>
+      <div class="kpi-sub">conversas → agendamentos</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Latência Média IA</div>
+      <div class="kpi-value" id="kpi-latency">—</div>
+      <div class="kpi-trend stable" id="trend-latency">—</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Escalações</div>
+      <div class="kpi-value" id="kpi-escalations">—</div>
+      <div class="kpi-sub" id="kpi-escalation-rate">taxa: —</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Satisfação Estimada</div>
+      <div class="kpi-value" id="kpi-satisfaction">—</div>
+      <div class="kpi-sub">baseado em sentimento</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">API Sofia</div>
+      <div class="kpi-value" id="kpi-api-latency">—</div>
+      <div class="kpi-sub" id="kpi-api-status">verificando…</div>
+    </div>
+  </div>
+
+  <!-- Funnel -->
+  <div class="section-title">🎯 Funil de Vendas</div>
+  <div class="funnel-grid">
+    <div class="funnel-step">
+      <div class="funnel-label">Awareness</div>
+      <div class="funnel-value" id="funnel-awareness">0</div>
+    </div>
+    <div class="funnel-step">
+      <div class="funnel-label">Consideração</div>
+      <div class="funnel-value" id="funnel-consideration">0</div>
+    </div>
+    <div class="funnel-step">
+      <div class="funnel-label">Decisão</div>
+      <div class="funnel-value" id="funnel-decision">0</div>
+    </div>
+    <div class="funnel-step">
+      <div class="funnel-label">Cliente</div>
+      <div class="funnel-value" id="funnel-customer">0</div>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="section-title">📈 Tendências (últimas 24h)</div>
+  <div class="charts-grid">
+    <div class="chart-card">
+      <div class="chart-title">
+        Conversas ao Longo do Tempo
+        <span class="chart-meta" id="chart-conv-meta">—</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart-conversations"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">
+        Latência da IA (ms)
+        <span class="chart-meta" id="chart-lat-meta">—</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart-latency"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">
+        Distribuição de Sentimento
+        <span class="chart-meta">últimas 24h</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart-sentiment"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">
+        Volume por Hora
+        <span class="chart-meta">hoje</span>
+      </div>
+      <div class="chart-wrap"><canvas id="chart-hourly"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Tables -->
+  <div class="section-title">💬 Conversas &amp; Leads</div>
+  <div class="tables-grid">
+    <!-- Conversas Ativas -->
+    <div class="table-card">
+      <div class="table-header">
+        Conversas Ativas
+        <span class="table-count" id="conv-count">0</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Telefone</th>
+            <th>Status</th>
+            <th>Modo</th>
+            <th>Msgs</th>
+          </tr>
+        </thead>
+        <tbody id="conv-table-body">
+          <tr class="empty-row"><td colspan="4">Aguardando dados…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Leads -->
+    <div class="table-card">
+      <div class="table-header">
+        Leads
+        <span class="table-count" id="leads-count">0</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Nome / Telefone</th>
+            <th>Funil</th>
+            <th>Sentimento</th>
+            <th>Msgs</th>
+          </tr>
+        </thead>
+        <tbody id="leads-table-body">
+          <tr class="empty-row"><td colspan="4">Aguardando dados…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Agendamentos -->
+  <div class="section-title">📅 Agendamentos de Hoje</div>
+  <div class="table-card" style="margin-bottom:24px">
+    <div class="table-header">
+      Agendamentos
+      <span class="table-count" id="appt-count">0</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Nome</th>
+          <th>Telefone</th>
+          <th>Data</th>
+          <th>Hora</th>
+          <th>Status</th>
+          <th>Tipo</th>
+        </tr>
+      </thead>
+      <tbody id="appt-table-body">
+        <tr class="empty-row"><td colspan="6">Aguardando dados…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</main>
+
+<script>
+/* ── Config ─────────────────────────────────────────────── */
+const API_BASE = window.location.origin;
+const WS_URL   = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
+const REFRESH_INTERVAL = 10_000; // 10s fallback se WS cair
+
+/* ── State ───────────────────────────────────────────────── */
+let charts = {};
+let convHistory = [];
+let latHistory  = [];
+let ws = null;
+let wsReconnectTimer = null;
+
+/* ── Chart.js defaults ───────────────────────────────────── */
+Chart.defaults.color = '#8b949e';
+Chart.defaults.borderColor = '#30363d';
+Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+Chart.defaults.font.size = 11;
+
+/* ── Helpers ─────────────────────────────────────────────── */
+function fmt(n, decimals = 0) {
+  if (n === undefined || n === null || n === '—') return '—';
+  const num = parseFloat(n);
+  if (isNaN(num)) return String(n);
+  return num.toLocaleString('pt-BR', { maximumFractionDigits: decimals });
+}
+
+function fmtMs(ms) {
+  if (!ms && ms !== 0) return '—';
+  return ms >= 1000 ? `${(ms/1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+}
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch { return iso; }
+}
+
+function fmtDateTime(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+  } catch { return iso; }
+}
+
+function pillStatus(status) {
+  const map = { active:'pill-green', closed:'pill-muted', waiting:'pill-yellow', escalated:'pill-red' };
+  return `<span class="pill ${map[status] || 'pill-muted'}">${status || '—'}</span>`;
+}
+
+function pillMode(mode) {
+  return mode === 'manual'
+    ? `<span class="pill pill-yellow">manual</span>`
+    : `<span class="pill pill-blue">auto</span>`;
+}
+
+function pillFunnel(stage) {
+  const map = { awareness:'pill-blue', consideration:'pill-purple', decision:'pill-yellow', customer:'pill-green' };
+  return `<span class="pill ${map[stage] || 'pill-muted'}">${stage || '—'}</span>`;
+}
+
+function pillSentiment(s) {
+  const map = { positive:'pill-green', neutral:'pill-muted', negative:'pill-red' };
+  return `<span class="pill ${map[s] || 'pill-muted'}">${s || '—'}</span>`;
+}
+
+function pillApptStatus(s) {
+  const map = { confirmed:'pill-green', pending:'pill-yellow', cancelled:'pill-red' };
+  return `<span class="pill ${map[s] || 'pill-muted'}">${s || '—'}</span>`;
+}
+
+function trendIcon(dir) {
+  if (dir === 'up')   return '↑';
+  if (dir === 'down') return '↓';
+  return '→';
+}
+
+function maskPhone(phone) {
+  if (!phone) return '—';
+  const s = String(phone);
+  if (s.length <= 4) return s;
+  return s.slice(0, -4).replace(/./g, '*') + s.slice(-4);
+}
+
+/* ── Status indicator ────────────────────────────────────── */
+function setStatus(online, text) {
+  const dot  = document.getElementById('status-dot');
+  const span = document.getElementById('status-text');
+  dot.className = online ? 'online' : 'offline';
+  span.textContent = text;
+}
+
+function setLastUpdate(iso) {
+  document.getElementById('last-update').textContent = `Atualizado: ${fmtTime(iso)}`;
+}
+
+/* ── Alerts ──────────────────────────────────────────────── */
+function renderAlerts(anomalies) {
+  const container = document.getElementById('alerts-container');
+  container.innerHTML = '';
+  if (!anomalies || anomalies.length === 0) return;
+  anomalies.forEach(a => {
+    const div = document.createElement('div');
+    div.className = `alert ${a.severity}`;
+    div.innerHTML = `
+      <strong>${a.severity === 'critical' ? '🚨' : '⚠️'} ${a.label}</strong>
+      — Valor atual: <strong>${fmt(a.value, 1)}${a.unit}</strong>
+      (média: ${fmt(a.mean, 1)}${a.unit}, Z-score: ${a.zScore})
+      — ${a.direction === 'high' ? 'Acima' : 'Abaixo'} do normal
+    `;
+    container.appendChild(div);
+  });
+}
+
+/* ── KPI Cards ───────────────────────────────────────────── */
+function renderKpis(snapshot, trends) {
+  const ov = snapshot.overview || {};
+  const kp = snapshot.kpis    || {};
+
+  setText('kpi-conversations', fmt(ov.totalConversations));
+  setText('kpi-active',        fmt(ov.activeSessions));
+  setText('kpi-manual',        `${fmt(snapshot.conversations?.manual || 0)} manuais`);
+  setText('kpi-appointments',  fmt(ov.totalAppointments));
+  setText('kpi-conversion',    ov.conversionRate || '—');
+  setText('kpi-latency',       fmtMs(ov.avgResponseTimeMs));
+  setText('kpi-escalations',   fmt(ov.totalEscalations));
+  setText('kpi-escalation-rate', `taxa: ${ov.escalationRate || '—'}`);
+  setText('kpi-satisfaction',  kp.satisfaction || '—');
+  setText('kpi-api-latency',   fmtMs(snapshot.apiLatencyMs));
+  setText('kpi-api-status',    snapshot.apiReachable ? '✅ Online' : '❌ Offline');
+
+  if (trends) {
+    renderTrend('trend-conversations', trends.conversations);
+    renderTrend('trend-appointments',  trends.appointments);
+    renderTrend('trend-latency',       trends.latency, true);
+  }
+}
+
+function renderTrend(id, trend, invertColors = false) {
+  if (!trend) return;
+  const el = document.getElementById(id);
+  if (!el) return;
+  const dir = trend.direction;
+  const isGood = invertColors
+    ? (dir === 'down')
+    : (dir === 'up');
+  const cls = dir === 'stable' ? 'stable' : (isGood ? 'up' : 'down');
+  el.className = `kpi-trend ${cls}`;
+  el.textContent = `${trendIcon(dir)} ${Math.abs(trend.deltaPercent)}% vs 10min atrás`;
+}
+
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+/* ── Funnel ──────────────────────────────────────────────── */
+function renderFunnel(funnel) {
+  if (!funnel) return;
+  setText('funnel-awareness',     fmt(funnel.awareness));
+  setText('funnel-consideration', fmt(funnel.consideration));
+  setText('funnel-decision',      fmt(funnel.decision));
+  setText('funnel-customer',      fmt(funnel.customer));
+}
+
+/* ── Charts ──────────────────────────────────────────────── */
+function initCharts() {
+  const commonOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 400 },
+    plugins: { legend: { display: false } },
+  };
+
+  // Conversas ao longo do tempo
+  charts.conversations = new Chart(document.getElementById('chart-conversations'), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'Conversas',
+        data: [],
+        borderColor: '#58a6ff',
+        backgroundColor: 'rgba(88,166,255,.08)',
+        fill: true,
+        tension: 0.4,
+        pointRadius: 0,
+        borderWidth: 2,
+      }],
+    },
+    options: {
+      ...commonOptions,
+      scales: {
+        x: { grid: { color: '#21262d' }, ticks: { maxTicksLimit: 8 } },
+        y: { grid: { color: '#21262d' }, beginAtZero: true },
+      },
+    },
+  });
+
+  // Latência
+  charts.latency = new Chart(document.getElementById('chart-latency'), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'Latência (ms)',
+        data: [],
+        borderColor: '#ffa657',
+        backgroundColor: 'rgba(255,166,87,.08)',
+        fill: true,
+        tension: 0.4,
+        pointRadius: 0,
+        borderWidth: 2,
+      }],
+    },
+    options: {
+      ...commonOptions,
+      scales: {
+        x: { grid: { color: '#21262d' }, ticks: { maxTicksLimit: 8 } },
+        y: { grid: { color: '#21262d' }, beginAtZero: true },
+      },
+    },
+  });
+
+  // Sentimento (doughnut)
+  charts.sentiment = new Chart(document.getElementById('chart-sentiment'), {
+    type: 'doughnut',
+    data: {
+      labels: ['Positivo', 'Neutro', 'Negativo'],
+      datasets: [{
+        data: [0, 0, 0],
+        backgroundColor: ['#3fb950', '#8b949e', '#f85149'],
+        borderWidth: 0,
+        hoverOffset: 6,
+      }],
+    },
+    options: {
+      ...commonOptions,
+      plugins: {
+        legend: {
+          display: true,
+          position: 'bottom',
+          labels: { padding: 16, usePointStyle: true, pointStyleWidth: 8 },
+        },
+      },
+      cutout: '65%',
+    },
+  });
+
+  // Volume por hora (bar)
+  charts.hourly = new Chart(document.getElementById('chart-hourly'), {
+    type: 'bar',
+    data: {
+      labels: Array.from({ length: 24 }, (_, i) => `${i}h`),
+      datasets: [{
+        label: 'Mensagens',
+        data: new Array(24).fill(0),
+        backgroundColor: 'rgba(88,166,255,.5)',
+        borderColor: '#58a6ff',
+        borderWidth: 1,
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      ...commonOptions,
+      scales: {
+        x: { grid: { display: false } },
+        y: { grid: { color: '#21262d' }, beginAtZero: true },
+      },
+    },
+  });
+}
+
+function updateTimeSeriesChart(chartKey, series, metaId) {
+  const chart = charts[chartKey];
+  if (!chart || !series || series.length === 0) return;
+
+  const labels = series.map(p => fmtTime(p.t));
+  const data   = series.map(p => p.v);
+
+  chart.data.labels = labels;
+  chart.data.datasets[0].data = data;
+  chart.update('none');
+
+  if (metaId) {
+    const last = data[data.length - 1];
+    document.getElementById(metaId).textContent = `atual: ${chartKey === 'latency' ? fmtMs(last) : fmt(last)}`;
+  }
+}
+
+function updateSentimentChart(sentiment) {
+  if (!sentiment || !charts.sentiment) return;
+  charts.sentiment.data.datasets[0].data = [
+    sentiment.positive || 0,
+    sentiment.neutral  || 0,
+    sentiment.negative || 0,
+  ];
+  charts.sentiment.update('none');
+}
+
+function updateHourlyChart(hourlyVolume) {
+  if (!hourlyVolume || !charts.hourly) return;
+  const data = Array.from({ length: 24 }, (_, i) => hourlyVolume[String(i)] || 0);
+  charts.hourly.data.datasets[0].data = data;
+  charts.hourly.update('none');
+}
+
+/* ── Tables ──────────────────────────────────────────────── */
+function renderConversations(conversations) {
+  const list  = conversations?.list || [];
+  const count = conversations?.active || list.length;
+  document.getElementById('conv-count').textContent = count;
+
+  const tbody = document.getElementById('conv-table-body');
+  if (list.length === 0) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Nenhuma conversa ativa</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = list.slice(0, 15).map(c => `
+    <tr>
+      <td>${maskPhone(c.phone)}</td>
+      <td>${pillStatus(c.status)}</td>
+      <td>${pillMode(c.mode)}</td>
+      <td>${fmt(c.messageCount)}</td>
+    </tr>
+  `).join('');
+}
+
+function renderLeads(leads) {
+  const list  = leads?.list || [];
+  const count = leads?.total || list.length;
+  document.getElementById('leads-count').textContent = count;
+
+  const tbody = document.getElementById('leads-table-body');
+  if (list.length === 0) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Nenhum lead disponível</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = list.slice(0, 15).map(l => `
+    <tr>
+      <td>${l.name || maskPhone(l.phone)}</td>
+      <td>${pillFunnel(l.funnelStage)}</td>
+      <td>${pillSentiment(l.sentiment)}</td>
+      <td>${fmt(l.totalMessages)}</td>
+    </tr>
+  `).join('');
+}
+
+function renderAppointments(appointments) {
+  const list  = appointments?.list || [];
+  const count = appointments?.today || list.length;
+  document.getElementById('appt-count').textContent = count;
+
+  const tbody = document.getElementById('appt-table-body');
+  if (list.length === 0) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">Nenhum agendamento hoje</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = list.map(a => `
+    <tr>
+      <td>${a.name || '—'}</td>
+      <td>${maskPhone(a.phone)}</td>
+      <td>${a.date || '—'}</td>
+      <td>${a.time || '—'}</td>
+      <td>${pillApptStatus(a.status)}</td>
+      <td>${a.type || '—'}</td>
+    </tr>
+  `).join('');
+}
+
+/* ── Main render ─────────────────────────────────────────── */
+function renderSnapshot(snapshot, trends, anomalies) {
+  if (!snapshot) return;
+
+  setStatus(snapshot.apiReachable, snapshot.apiReachable ? 'API Online' : 'API Offline');
+  setLastUpdate(snapshot.collectedAt);
+
+  renderKpis(snapshot, trends);
+  renderFunnel(snapshot.funnel);
+  updateSentimentChart(snapshot.sentiment);
+  updateHourlyChart(snapshot.overview?.hourlyVolume || snapshot.hourlyVolume);
+  renderConversations(snapshot.conversations);
+  renderLeads(snapshot.leads);
+  renderAppointments(snapshot.appointments);
+
+  if (anomalies) renderAlerts(anomalies);
+}
+
+/* ── Time series fetch ───────────────────────────────────── */
+async function fetchTimeSeries() {
+  try {
+    const [convRes, latRes] = await Promise.all([
+      fetch(`${API_BASE}/api/timeseries?metric=overview.totalConversations&hours=24`),
+      fetch(`${API_BASE}/api/timeseries?metric=overview.avgResponseTimeMs&hours=24`),
+    ]);
+    const convData = await convRes.json();
+    const latData  = await latRes.json();
+
+    updateTimeSeriesChart('conversations', convData.series, 'chart-conv-meta');
+    updateTimeSeriesChart('latency',       latData.series,  'chart-lat-meta');
+  } catch (err) {
+    console.warn('[analytics-ui] Falha ao buscar séries temporais:', err.message);
+  }
+}
+
+async function fetchTrends() {
+  try {
+    const res  = await fetch(`${API_BASE}/api/trends`);
+    const data = await res.json();
+    return data.trends || null;
+  } catch { return null; }
+}
+
+async function fetchAnomalies() {
+  try {
+    const res  = await fetch(`${API_BASE}/api/anomalies`);
+    const data = await res.json();
+    return data.anomalies || [];
+  } catch { return []; }
+}
+
+/* ── Polling fallback ────────────────────────────────────── */
+async function pollSnapshot() {
+  try {
+    const res  = await fetch(`${API_BASE}/api/snapshot`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const [trends, anomalies] = await Promise.all([fetchTrends(), fetchAnomalies()]);
+    renderSnapshot(data.snapshot, trends, anomalies);
+  } catch (err) {
+    setStatus(false, 'Erro de conexão');
+    console.warn('[analytics-ui] Polling falhou:', err.message);
+  }
+}
+
+/* ── WebSocket ───────────────────────────────────────────── */
+function connectWs() {
+  if (ws && ws.readyState < 2) return; // já conectado ou conectando
+
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    console.log('[analytics-ui] WS conectado');
+    clearTimeout(wsReconnectTimer);
+  };
+
+  ws.onmessage = async (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'snapshot') {
+        const [trends, anomalies] = await Promise.all([fetchTrends(), fetchAnomalies()]);
+        renderSnapshot(msg.data, trends, anomalies);
+        // Atualiza séries temporais a cada 6 snapshots (≈ 1 min)
+        if (Math.random() < 0.17) fetchTimeSeries();
+      } else if (msg.type === 'anomalies') {
+        renderAlerts(msg.data);
+      }
+    } catch (err) {
+      console.warn('[analytics-ui] Erro ao processar mensagem WS:', err.message);
+    }
+  };
+
+  ws.onclose = () => {
+    console.warn('[analytics-ui] WS desconectado. Reconectando em 5s…');
+    wsReconnectTimer = setTimeout(connectWs, 5000);
+  };
+
+  ws.onerror = () => {
+    ws.close();
+  };
+}
+
+/* ── Init ────────────────────────────────────────────────── */
+async function init() {
+  initCharts();
+
+  // Primeira carga via REST
+  await pollSnapshot();
+  await fetchTimeSeries();
+
+  // Esconde loader
+  const loader = document.getElementById('loader');
+  loader.classList.add('hidden');
+  setTimeout(() => loader.remove(), 500);
+
+  // Conecta WebSocket para push em tempo real
+  connectWs();
+
+  // Polling de fallback a cada 10s (caso WS caia)
+  setInterval(() => {
+    if (!ws || ws.readyState > 1) pollSnapshot();
+  }, REFRESH_INTERVAL);
+
+  // Atualiza séries temporais a cada 60s
+  setInterval(fetchTimeSeries, 60_000);
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
