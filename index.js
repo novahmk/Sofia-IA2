@@ -1,35 +1,146 @@
 /**
- * SOFIA IA — Servidor Principal
- * ═══════════════════════════════════════════════════════════════
- * 
- * Servidor HTTP nativo Node.js (sem Express) que opera como:
- *   1. Webhook receiver para WhatsApp via UAZAPI
- *   2. API REST com JWT auth para dashboard administrativo  
- *   3. WebSocket server para real-time dashboard updates
- *   4. Motor de IA conversacional (GPT-4o-mini)
- * 
- * PADRÃO DE ROTAS:
- *   Todas as rotas estão neste arquivo, no callback de http.createServer.
+ * @file index.js — Sofia IA2 · Servidor Principal
+ * @description Servidor HTTP nativo Node.js (sem Express) para a Sofia Agent,
+ *   consultora digital especializada em mesoterapia capilar da Quality Hair.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * RESPONSABILIDADES
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ *   1. Webhook receiver para WhatsApp via UAZAPI (POST /webhook)
+ *   2. Endpoint genérico de mensagens (POST /api/messages)
+ *   3. API REST com JWT auth para dashboard administrativo (GET /api/dashboard/*)
+ *   4. WebSocket server para real-time dashboard updates (WS /ws/dashboard)
+ *   5. Motor de IA conversacional (GPT-4o-mini + RAG via knowledgeBase.js)
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * PADRÃO DE ROTAS
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ *   Todas as rotas estão neste arquivo, dentro do callback de http.createServer.
  *   O callback é async: async (req, res) => { ... }
+ *
  *   Cada rota segue o padrão:
  *     if (req.method === 'GET' && req.url === '/path') { ... return; }
- * 
- * AUTENTICAÇÃO:
- *   Rotas /api/dashboard/* requerem header Authorization: Bearer <JWT>
- *   auth.authenticate(req, res) retorna {id, email, role} ou envia 401
- * 
- * WEBSOCKET:
- *   wsManager.init(server) no start() — path: /ws/dashboard?token=JWT
- * 
- * PORTA:
- *   process.env.PORT (Railway injeta) || process.env.WEBHOOK_PORT || 3000
- * 
- * DEPLOY:
- *   Railway auto-deploy via push no GitHub main branch
- *   Nixpacks detecta Node.js → npm install → Procfile: node index.js
- *   Health check: GET /health → {"status":"ok"}
- * 
- * ═══════════════════════════════════════════════════════════════
+ *
+ *   Helper interno `readBody()` faz parse do JSON body via Promise (req.on('data')).
+ *   Helper interno `json(statusCode, data)` envia resposta JSON com headers CORS.
+ *
+ *   EXCEÇÃO — Webhooks (POST /webhook e POST /api/messages):
+ *     Usam req.on('data') / req.on('end') diretamente (callback, NÃO await).
+ *     Respondem 200 imediatamente e processam de forma assíncrona via
+ *     processIncomingMessage(webhookData) — fire-and-forget intencional.
+ *     NÃO converter para async/await sem refatorar o fluxo completo.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ESTRUTURA DE ROTAS
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ *   PÚBLICAS (sem autenticação):
+ *     GET  /health                          → {status:"ok", uptime:N}
+ *     GET  /metrics                         → KPIs + A/B + performance
+ *     POST /webhook                         → Webhook UAZAPI WhatsApp (async)
+ *     POST /api/messages                    → Endpoint genérico de mensagens (async)
+ *     POST /api/auth/signup                 → Cadastro {name, email, password, role}
+ *     POST /api/auth/login                  → Login → {token, user}
+ *     POST /api/auth/forgot-password        → Recuperação de senha (placeholder)
+ *     GET  /dashboard                       → Serve dashboard.html (SPA)
+ *
+ *   AUTENTICADAS (Header: Authorization: Bearer <JWT>):
+ *     GET  /api/dashboard/overview          → KPIs, funil, volume por hora
+ *     GET  /api/dashboard/conversations     → Conversas ativas + histórico
+ *     GET  /api/dashboard/leads             → Leads com perfil e sentimento
+ *     GET  /api/dashboard/appointments      → Agendamentos do dia
+ *     GET  /api/dashboard/kpis              → Latência, tokens, sentimento
+ *     GET  /api/dashboard/ab-test           → Variantes A/B com métricas
+ *     GET  /api/dashboard/system            → Circuit breakers, self-healing
+ *     GET  /api/dashboard/security          → Auditoria, LGPD, injeções
+ *     GET  /api/dashboard/knowledge-base    → Documentos + gaps
+ *     POST /api/dashboard/knowledge-base    → Adicionar documento {question, answer}
+ *     POST /api/dashboard/conversations/:id/handoff → Transferir para humano
+ *     POST /api/dashboard/lgpd/export       → Exportar dados {phone}
+ *     POST /api/dashboard/lgpd/delete       → Excluir dados {phone} (admin only)
+ *
+ *   LEGADO (backward compat):
+ *     GET  /dashboard/data                  → JSON com dados agregados
+ *     GET  /dashboard/health-check          → Health check dos serviços
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * AUTENTICAÇÃO
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ *   Rotas /api/dashboard/* requerem header: Authorization: Bearer <JWT>
+ *   auth.authenticate(req, res) → retorna {id, email, role} ou envia 401 e retorna null
+ *   auth.hasPermission(role, url) → verifica permissão por role (admin/atendente/visualizador)
+ *   JWT_SECRET deve ser definido nas variáveis de ambiente (recomendado: 64 chars hex)
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * RATE LIMITING
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ *   Implementado em memória (in-process) via objeto `rateLimits`:
+ *     - Janela: 60 segundos (RATE_LIMIT_WINDOW_MS)
+ *     - Limite: 10 mensagens por janela (RATE_LIMIT_MAX_MESSAGES)
+ *     - Bloqueio: mensagem ignorada + auditLogger.rateLimited()
+ *   Estado perdido em restart — não compartilhado entre instâncias.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ESCALAÇÃO PARA HUMANO
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ *   Sofia pode ser pausada por telefone via comando de controle (ADMIN_PHONES).
+ *   Quando em modo manual (state.mode = 'manual'), mensagens são registradas
+ *   mas não respondidas pela IA — apenas confirmação de recebimento é enviada.
+ *   Dashboard: POST /api/dashboard/conversations/:id/handoff assume a conversa.
+ *   Evento WebSocket `handoff_requested` notifica o dashboard em tempo real.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * WEBSOCKET
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ *   wsManager.init(server) é chamado no start() após server.listen().
+ *   Roda no mesmo server HTTP — não em porta separada.
+ *   Path: /ws/dashboard?token=JWT (token verificado no handshake)
+ *   Eventos: new_message, conversation_updated, handoff_requested, system_alert
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * VARIÁVEIS DE AMBIENTE OBRIGATÓRIAS
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ *   OPENAI_API_KEY   → Chave API OpenAI (GPT-4o-mini + embeddings)
+ *   UAZAPI_BASE_URL  → URL base UAZAPI (ex: https://free.uazapi.com)
+ *   UAZAPI_TOKEN     → Token da instância UAZAPI WhatsApp
+ *   JWT_SECRET       → Secret para assinar tokens JWT
+ *
+ *   Opcionais:
+ *   DATABASE_URL     → PostgreSQL connection string (fallback: in-memory)
+ *   FEEGOW_TOKEN     → Token JWT da API Feegow (agenda médica)
+ *   ADMIN_PHONES     → Telefones admin separados por vírgula
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * PORTA E DEPLOY
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ *   Porta: process.env.PORT (Railway injeta) || process.env.WEBHOOK_PORT || 3000
+ *   Healthcheck: GET /health → {"status":"ok","uptime":N}
+ *
+ *   Deploy no Railway:
+ *     - Builder: Railpack (detecta Node.js 22 automaticamente)
+ *     - Pre-deploy: node migrations.js (cria tabelas PostgreSQL — idempotente)
+ *     - Start: node index.js
+ *     - Auto-deploy a cada push na branch main do GitHub
+ *     - Sem build step — Node.js puro, sem TypeScript, sem bundler
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * LGPD
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ *   Todas as ações são registradas em audit_log via auditLogger.js.
+ *   Exportação: POST /api/dashboard/lgpd/export {phone}
+ *   Exclusão:   POST /api/dashboard/lgpd/delete {phone} (admin only)
+ *   Consentimentos rastreados na tabela `consents` (PostgreSQL).
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
  */
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });

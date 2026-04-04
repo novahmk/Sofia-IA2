@@ -1,29 +1,60 @@
 # ============================================================
-# SOFIA IA — Consultora Digital de Terapia Capilar
+# SOFIA IA2 — Consultora Digital de Mesoterapia Capilar
 # Deploy config para Railway (https://railway.com)
+# Gerado para: Node.js 22.22.2 · Railpack builder
 # ============================================================
 #
-# ARQUITETURA DO PROJETO:
-# ─────────────────────────────────────────────────────────────
-# Este é um servidor Node.js monolítico (sem Express) que opera como:
-#   1. Webhook receiver para WhatsApp via UAZAPI
-#   2. API REST com JWT auth para dashboard administrativo
-#   3. WebSocket server para real-time dashboard updates
-#   4. Motor de IA conversacional (GPT-4o-mini via OpenAI)
+# ── VISÃO GERAL ──────────────────────────────────────────────
 #
-# ESTRUTURA DE ROTAS (index.js):
-# ─────────────────────────────────────────────────────────────
-# PÚBLICAS (sem auth):
+# Servidor Node.js monolítico (sem Express) que opera como:
+#   1. Webhook receiver para WhatsApp via UAZAPI
+#   2. Endpoint genérico de mensagens em POST /api/messages
+#   3. API REST com JWT auth para dashboard administrativo
+#   4. WebSocket server para real-time dashboard updates
+#   5. Motor de IA conversacional (GPT-4o-mini + RAG)
+#
+# ── BUILD ────────────────────────────────────────────────────
+#
+# Railpack detecta Node.js 22 automaticamente via package.json.
+# Não há transpilação — é JavaScript puro (sem TypeScript, sem bundler).
+# O único passo de build é `npm install` (dependências de produção).
+#
+# ── PRÉ-DEPLOY ───────────────────────────────────────────────
+#
+# `node migrations.js` cria todas as tabelas no PostgreSQL antes
+# de cada deploy. É idempotente (usa CREATE TABLE IF NOT EXISTS),
+# portanto seguro de rodar múltiplas vezes.
+# Se DATABASE_URL não estiver definida, o servidor usa fallback in-memory.
+#
+# ── START ────────────────────────────────────────────────────
+#
+# `node index.js` inicia o servidor HTTP na porta definida por
+# process.env.PORT (Railway injeta automaticamente) ou 3000.
+# O servidor registra todas as rotas no callback de http.createServer.
+#
+# ── HEALTHCHECK ──────────────────────────────────────────────
+#
+# GET /health → {"status":"ok","uptime":N}
+# Railway usa este endpoint para verificar se o serviço está saudável.
+# Timeout de 30s — se não responder, Railway reinicia o container.
+#
+# ── ESTRUTURA DE ROTAS (index.js) ────────────────────────────
+#
+# PADRÃO: if (req.method === 'GET' && req.url === '/path') { ... return; }
+# O callback do server é async: async (req, res) => { ... }
+# NÃO usa Express — roteamento manual dentro do callback HTTP nativo.
+#
+# PÚBLICAS (sem autenticação):
 #   GET  /health                          → Health check simples
-#   GET  /metrics                         → Métricas completas (KPIs, A/B, etc.)
+#   GET  /metrics                         → KPIs, A/B, performance
 #   POST /webhook                         → Webhook UAZAPI WhatsApp
 #   POST /api/messages                    → Endpoint genérico de mensagens
-#   POST /api/auth/signup                 → Cadastro de usuário dashboard
-#   POST /api/auth/login                  → Login → retorna JWT token
-#   POST /api/auth/forgot-password        → Recuperação de senha
+#   POST /api/auth/signup                 → Cadastro {name, email, password, role}
+#   POST /api/auth/login                  → Login → {token, user}
+#   POST /api/auth/forgot-password        → Recuperação de senha (placeholder)
 #   GET  /dashboard                       → Serve dashboard.html (SPA)
 #
-# AUTENTICADAS (JWT Bearer token):
+# AUTENTICADAS (Header: Authorization: Bearer <JWT>):
 #   GET  /api/dashboard/overview          → KPIs, funil, volume por hora
 #   GET  /api/dashboard/conversations     → Conversas ativas + histórico
 #   GET  /api/dashboard/leads             → Leads com perfil e sentimento
@@ -33,69 +64,129 @@
 #   GET  /api/dashboard/system            → Circuit breakers, self-healing
 #   GET  /api/dashboard/security          → Auditoria, LGPD, injeções
 #   GET  /api/dashboard/knowledge-base    → Documentos + gaps
-#   POST /api/dashboard/knowledge-base    → Adicionar documento à KB
+#   POST /api/dashboard/knowledge-base    → Adicionar documento {question, answer}
 #   POST /api/dashboard/conversations/:id/handoff → Transferir para humano
-#   POST /api/dashboard/lgpd/export       → Exportar dados do cliente
-#   POST /api/dashboard/lgpd/delete       → Excluir dados (LGPD)
+#   POST /api/dashboard/lgpd/export       → Exportar dados {phone}
+#   POST /api/dashboard/lgpd/delete       → Excluir dados {phone} (admin only)
 #
 # LEGADO (backward compat):
 #   GET  /dashboard/data                  → JSON com dados agregados
 #   GET  /dashboard/health-check          → Health check dos serviços
 #
 # WebSocket: ws://HOST/ws/dashboard?token=JWT
+#   Eventos emitidos: new_message, conversation_updated,
+#                     handoff_requested, kpi_update, system_alert
 #
-# MÓDULOS INTERNOS:
-# ─────────────────────────────────────────────────────────────
+# ── MÓDULOS INTERNOS ─────────────────────────────────────────
+#
 #   index.js              → Servidor HTTP principal + todas as rotas
-#   ai.js                 → Motor GPT-4o-mini (getSofiaResponse)
-#   auth.js               → JWT auth (signup/login/verify/middleware)
+#   ai.js                 → Motor GPT-4o-mini (getSofiaResponse + RAG)
+#   auth.js               → JWT auth (signup/login/verifyToken/authenticate)
 #   wsManager.js          → WebSocket server para dashboard real-time
-#   knowledgeBase.js      → RAG com embeddings OpenAI (13 docs)
-#   conversationManager.js→ Estado das conversas (new/active/closed)
-#   clientMemory.js       → Perfil persistente do cliente
-#   messagingClient.js    → Client UAZAPI para envio WhatsApp
+#   knowledgeBase.js      → RAG com embeddings OpenAI (text-embedding-3-small)
+#   conversationManager.js→ Estado das conversas (new → active → closed)
+#   clientMemory.js       → Perfil persistente: nome, funil, sentimento
+#   messagingClient.js    → Client UAZAPI para envio de mensagens WhatsApp
 #   dashboardApi.js       → Agrega dados de todos os módulos
-#   kpiTracker.js         → Métricas de performance
+#   kpiTracker.js         → Latência, tokens, sentimento, conversão
 #   abTesting.js          → Teste A/B de variantes de prompt
-#   intentFlow.js         → Detecção e tracking de intenções
-#   inputSanitizer.js     → Proteção contra injeção de prompt
-#   topicBlacklist.js     → Bloqueio de tópicos fora do escopo
-#   auditLogger.js        → Trilha de auditoria LGPD
-#   selfHealing.js        → Auto-recuperação de erros
-#   swop.js               → Circuit breaker pattern
-#   feegow.js             → Integração com agenda Feegow
-#   database.js           → Persistência PostgreSQL / in-memory
-#   dashboard.html        → SPA do dashboard (Chart.js, auth, WS)
+#   intentFlow.js         → Tracking de intenções (greeting→info→pricing→booking)
+#   inputSanitizer.js     → Proteção contra prompt injection e jailbreak
+#   topicBlacklist.js     → Bloqueia tópicos fora do escopo (concorrentes, etc.)
+#   auditLogger.js        → Trilha de auditoria para LGPD compliance
+#   selfHealing.js        → Auto-recuperação: retry, fallback, circuit breaker
+#   swop.js               → Circuit breaker pattern para serviços externos
+#   feegow.js             → Integração com API Feegow (agendamento médico)
+#   database.js           → Abstração PostgreSQL com fallback in-memory
+#   migrations.js         → Cria tabelas no PostgreSQL (idempotente)
+#   dashboard.html        → SPA: auth, 9 páginas, Chart.js, WebSocket client
 #
-# VARIÁVEIS DE AMBIENTE REQUERIDAS:
-# ─────────────────────────────────────────────────────────────
-#   OPENAI_API_KEY        → Chave API OpenAI (obrigatória)
-#   PORT                  → Porta do servidor (Railway define automaticamente)
-#   UAZAPI_BASE_URL       → URL base UAZAPI (https://free.uazapi.com)
-#   UAZAPI_TOKEN          → Token da instância UAZAPI
-#   JWT_SECRET            → Secret para tokens JWT do dashboard
-#   FEEGOW_TOKEN          → Token API Feegow (agenda médica)
-#   DATABASE_URL          → PostgreSQL connection string (opcional)
+# ── VARIÁVEIS DE AMBIENTE ────────────────────────────────────
+#
+# OBRIGATÓRIAS para funcionamento completo:
+#   OPENAI_API_KEY        → Chave API OpenAI (GPT-4o-mini + embeddings)
+#   UAZAPI_BASE_URL       → URL base UAZAPI (ex: https://free.uazapi.com)
+#   UAZAPI_TOKEN          → Token da instância UAZAPI WhatsApp
+#   JWT_SECRET            → Secret para assinar tokens JWT (64 chars hex)
+#
+# OPCIONAIS (funcionalidades extras):
+#   DATABASE_URL          → PostgreSQL connection string (fallback: in-memory)
+#   FEEGOW_TOKEN          → Token JWT da API Feegow (agenda médica)
 #   ADMIN_PHONES          → Telefones admin separados por vírgula
 #
-# IMPORTANTE PARA A IA DO RAILWAY:
-# ─────────────────────────────────────────────────────────────
-# - NÃO usar Express — o servidor é http.createServer nativo
+# INJETADAS PELO RAILWAY (não configurar manualmente):
+#   PORT                  → Porta do servidor HTTP (Railway define automaticamente)
+#
+# ── RATE LIMITING ────────────────────────────────────────────
+#
+# Rate limiting por usuário implementado em memória (in-process):
+#   - Janela: 60 segundos
+#   - Limite: 10 mensagens por janela
+#   - Bloqueio: mensagem ignorada + log de auditoria
+# Não usa Redis — estado perdido em restart. Adequado para instância única.
+# Para múltiplas instâncias, migrar para Redis-backed rate limiting.
+#
+# ── ESCALAÇÃO PARA HUMANO ────────────────────────────────────
+#
+# Sofia pode ser pausada por número de telefone via comando de controle.
+# Quando em modo manual, mensagens são registradas mas não respondidas pela IA.
+# O dashboard permite assumir conversas via POST /api/dashboard/conversations/:id/handoff.
+# Evento WebSocket `handoff_requested` notifica o dashboard em tempo real.
+#
+# ── LGPD ─────────────────────────────────────────────────────
+#
+# Todas as ações são registradas em audit_log (PostgreSQL ou in-memory).
+# Exportação de dados: POST /api/dashboard/lgpd/export {phone}
+# Exclusão de dados:   POST /api/dashboard/lgpd/delete {phone} (admin only)
+# Consentimentos rastreados na tabela `consents`.
+#
+# ── WEBSOCKET ────────────────────────────────────────────────
+#
+# wsManager.init(server) é chamado no start() após server.listen().
+# O WebSocket roda no mesmo server HTTP (não em porta separada).
+# Path: /ws/dashboard?token=JWT
+# Autenticação: token JWT na query string (verificado no handshake).
+#
+# ── ASYNC/AWAIT E CALLBACKS ──────────────────────────────────
+#
+# ATENÇÃO: O callback do http.createServer é async, mas o handler do
+# webhook POST /webhook e POST /api/messages usa req.on('data') e
+# req.on('end') — padrão de callback, NÃO await. Isso é intencional:
+# a resposta 200 é enviada imediatamente e o processamento ocorre
+# de forma assíncrona via processIncomingMessage(webhookData).
+# NÃO converter esses handlers para async/await sem refatorar o fluxo.
+#
+# ── NOTAS PARA A IA DO RAILWAY ───────────────────────────────
+#
+# - NÃO usa Express — servidor é http.createServer nativo
 # - O callback do server é async (req, res) => { }
 # - Todas as rotas estão em index.js dentro do callback
-# - Autenticação JWT usa o módulo auth.js (Bearer token)
-# - WebSocket roda no mesmo server HTTP (path /ws/dashboard)
+# - Autenticação JWT usa auth.js: authenticate(req, res) → {id, email, role}
+# - WebSocket roda no mesmo server HTTP via wsManager.init(server)
 # - dashboard.html é servido como arquivo estático via fs.readFileSync
-# - A porta é definida por process.env.PORT (Railway injeta automaticamente)
-# - Não há build step — é Node.js puro sem transpilação
+# - A porta é sempre process.env.PORT (Railway injeta automaticamente)
+# - Sem build step — Node.js puro, sem TypeScript, sem bundler
+# - Fila de mensagens por usuário: messageQueues[phone] = Promise chain
+# - processIncomingMessage() é chamado de forma fire-and-forget no webhook
 # ============================================================
 
 [build]
-builder = "NIXPACKS"
+# Railpack detecta Node.js 22 automaticamente via engines no package.json
+# ou pela versão instalada no ambiente. Sem build step customizado.
+builder = "RAILPACK"
 
 [deploy]
+# Roda migrations antes de cada deploy (idempotente — IF NOT EXISTS)
+# Remove este comando se não usar PostgreSQL (DATABASE_URL não definida)
+preDeployCommand = "node migrations.js"
+
+# Inicia o servidor HTTP na porta process.env.PORT (Railway injeta)
 startCommand = "node index.js"
+
+# Railway faz GET /health a cada 30s para verificar saúde do serviço
 healthcheckPath = "/health"
 healthcheckTimeout = 30
+
+# Reinicia automaticamente em caso de crash (exit code != 0)
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
