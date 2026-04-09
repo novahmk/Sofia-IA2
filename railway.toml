@@ -88,6 +88,16 @@
 # - dashboard.html é servido como arquivo estático via fs.readFileSync
 # - A porta é definida por process.env.PORT (Railway injeta automaticamente)
 # - Não há build step — é Node.js puro sem transpilação
+#
+# DASHBOARD SEGURO (dashboard-server.js):
+# ─────────────────────────────────────────────────────────────
+# - Servidor Express separado com HTTPS/TLS na porta DASHBOARD_PORT (8443)
+# - Iniciar manualmente: node dashboard-server.js
+# - Ou via npm: npm run start:dashboard
+# - Variáveis obrigatórias: JWT_SECRET, JWT_REFRESH_SECRET, ENCRYPTION_KEY
+# - TLS em dev: certificado auto-assinado (pacote selfsigned)
+# - TLS em prod: TLS_CERT e TLS_KEY (base64 PEM) via variáveis de ambiente
+# - Health check: GET /health → { status: "ok", secure: true }
 # ============================================================
 
 [build]
@@ -99,3 +109,21 @@ healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
+
+# ── Dashboard seguro (serviço separado no Railway) ────────────
+# Para rodar o dashboard-server.js como serviço independente no Railway,
+# crie um novo serviço apontando para o mesmo repositório e configure:
+#
+#   startCommand  = "node dashboard-server.js"
+#   healthcheckPath = "/health"
+#
+# Variáveis de ambiente necessárias no serviço do dashboard:
+#   DASHBOARD_PORT        = 8443
+#   JWT_SECRET            = <64 chars hex>
+#   JWT_REFRESH_SECRET    = <64 chars hex>
+#   ENCRYPTION_KEY        = <32 bytes = 64 chars hex>
+#   DASHBOARD_DOMAIN      = sofia-ia2-production.up.railway.app
+#   TLS_CERT              = <certificado PEM em base64>
+#   TLS_KEY               = <chave privada PEM em base64>
+#   NODE_ENV              = production
+#   ENCRYPT_RESPONSES     = false
