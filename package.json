@@ -4,7 +4,9 @@
   "description": "Consultora digital Quality Hair",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "start:dashboard": "node dashboard-server.js",
+    "start:all": "node index.js & node dashboard-server.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
