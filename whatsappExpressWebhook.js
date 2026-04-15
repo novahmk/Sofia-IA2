@@ -1,7 +1,22 @@
+// ── Crash handlers — PRIMEIRO para capturar qualquer erro no startup ──
+process.on('uncaughtException', (err) => {
+  console.error('💀 UNCAUGHT EXCEPTION:', err.message);
+  console.error(err.stack);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💀 UNHANDLED REJECTION:', reason);
+});
+
+console.log('📌 [BOOT] Iniciando imports...');
 const express = require('express');
+console.log('📌 [BOOT] express OK');
 const axios = require('axios');
+console.log('📌 [BOOT] axios OK');
 const { OpenAI } = require('openai');
+console.log('📌 [BOOT] openai OK');
 const crypto = require('crypto');
+console.log('📌 [BOOT] crypto OK');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -313,7 +328,9 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+console.log(`📌 [BOOT] Tentando bind na porta ${PORT} (0.0.0.0)...`);
+
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Sofia IA rodando na porta ${PORT} (0.0.0.0)`);
   console.log(`🔗 Webhook: POST /webhook`);
   console.log(`📊 Dashboard: GET /dashboard`);
@@ -327,4 +344,10 @@ app.listen(PORT, '0.0.0.0', () => {
   if (!OPENAI_API_KEY) console.error('🚨 OPENAI_API_KEY ausente — bot não conseguirá gerar respostas!');
   if (!WASENDERAPI_TOKEN) console.error('🚨 WASENDERAPI_TOKEN ausente — bot não conseguirá enviar mensagens!');
   if (!WEBHOOK_SECRET) console.warn('⚠️ WASENDERAPI_WEBHOOK_SECRET ausente — webhook aceita requisições de qualquer origem');
+});
+
+server.on('error', (err) => {
+  console.error(`💀 [BOOT] ERRO ao fazer listen na porta ${PORT}:`, err.message);
+  console.error(err.stack);
+  process.exit(1);
 });
