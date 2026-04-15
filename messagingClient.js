@@ -123,6 +123,13 @@ class MessagingClient {
         }
 
         const phone = this.normalizePhoneNumber(phoneNumber);
+
+        // Validar número: deve ter ao menos 10 dígitos (código país + DDD + número)
+        if (!phone || phone.length < 10) {
+            console.error(`❌ Número de telefone inválido: ${phoneNumber} → ${phone}`);
+            return { queued: false, reason: 'invalid_phone_number' };
+        }
+
         let payload = {};
 
         if (this.provider === 'wasenderapi') {
@@ -140,8 +147,9 @@ class MessagingClient {
             };
         }
 
+        console.log(`📤 [${this.provider.toUpperCase()}] Enviando para ${phone} (${phone.length} dígitos)...`);
         const response = await this._request('POST', this.sendPath, payload);
-        console.log(`📤 [${this.provider.toUpperCase()}] Mensagem para ${phone}: "${message.substring(0, 80)}..."`);
+        console.log(`✅ [${this.provider.toUpperCase()}] Mensagem enviada para ${phone}`);
         return response;
     }
 
