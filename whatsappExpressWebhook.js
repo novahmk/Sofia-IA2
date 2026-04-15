@@ -8,9 +8,7 @@ const PORT = process.env.PORT || 8080;
 
 const ACCESS_TOKEN = process.env.API_ACCESS_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
-const VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN;
 const WEBHOOK_SECRET = process.env.WASENDERAPI_WEBHOOK_SECRET || process.env.WEBHOOK_SECRET;
-const WEBHOOK_API_KEY = process.env.WEBHOOK_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const WASENDERAPI_BASE_URL = process.env.WASENDERAPI_BASE_URL || 'https://www.wasenderapi.com/api';
 const WASENDERAPI_TOKEN = process.env.WASENDERAPI_TOKEN || ACCESS_TOKEN;
@@ -31,46 +29,20 @@ function safeCompare(a, b) {
   return crypto.timingSafeEqual(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'));
 }
 
-function computeSignature(rawBody, secret) {
-  return crypto
-    .createHmac('sha256', secret)
-    .update(rawBody || '')
-    .digest('hex');
-}
-
 function authenticateWebhookRequest(req) {
-  if (WEBHOOK_API_KEY) {
-    const apiKeyHeader = req.header('x-api-key');
-    if (!safeCompare(apiKeyHeader || '', WEBHOOK_API_KEY)) {
-      console.warn('⁉️ Cabeçalho x-api-key inválido ou ausente');
-      return false;
-    }
+  // WASenderAPI envia o WASENDERAPI_WEBHOOK_SECRET no header X-Webhook-Signature
+  if (!WEBHOOK_SECRET) {
+    // Se não configurou secret, aceita tudo (dev/teste)
+    return true;
   }
 
-  if (WEBHOOK_SECRET) {
-    const secretHeader = req.header('x-webhook-secret');
-    const signatureHeader = req.header('x-webhook-signature');
-    const body = req.rawBody || '';
-
-    if (secretHeader && safeCompare(secretHeader, WEBHOOK_SECRET)) {
-      return true;
-    }
-
-    if (signatureHeader) {
-      const received = signatureHeader.toLowerCase().startsWith('sha256=')
-        ? signatureHeader.slice('sha256='.length)
-        : signatureHeader;
-      const expected = computeSignature(body, WEBHOOK_SECRET);
-      if (safeCompare(received, expected)) {
-        return true;
-      }
-    }
-
-    console.warn('⁉️ Falha na validação do webhook: x-webhook-secret / x-webhook-signature inválido');
-    return false;
+  const signature = req.header('x-webhook-signature') || '';
+  if (safeCompare(signature, WEBHOOK_SECRET)) {
+    return true;
   }
 
-  return true;
+  console.warn(`⁉️ Webhook rejeitado: X-Webhook-Signature inválido ou ausente`);
+  return false;
 }
 
 function createOpenAIResponse(userText) {
@@ -272,5 +244,4 @@ app.listen(PORT, () => {
   console.log(`📡 WASenderAPI URL: ${WASENDERAPI_BASE_URL}`);
   console.log(`🔑 Token configurado: ${WASENDERAPI_TOKEN ? 'SIM' : 'NÃO'}`);
   console.log(`🔐 Webhook Secret configurado: ${WEBHOOK_SECRET ? 'SIM' : 'NÃO'}`);
-  console.log(`✅ Verify Token configurado: ${VERIFY_TOKEN ? 'SIM' : 'NÃO'}`);
 });
