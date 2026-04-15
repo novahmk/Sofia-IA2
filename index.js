@@ -479,12 +479,13 @@ const server = http.createServer(async (req, res) => {
             req.on('data', chunk => { body += chunk; });
             req.on('end', () => {
                 try {
-                    // Validar webhook signature
-                    const signature = req.headers['x-webhook-signature'];
+                    // Validar webhook signature em vários cabeçalhos possíveis
                     const webhookSecret = process.env.WASENDERAPI_WEBHOOK_SECRET;
+                    const signature = req.headers['x-webhook-signature'] || req.headers['x-webhook-secret'] || req.headers['x-api-key'];
+                    const headerSource = req.headers['x-webhook-signature'] ? 'x-webhook-signature' : req.headers['x-webhook-secret'] ? 'x-webhook-secret' : req.headers['x-api-key'] ? 'x-api-key' : 'none';
                     
                     if (webhookSecret && (!signature || signature !== webhookSecret)) {
-                        console.warn(`🚨 Webhook rejeitado: signature inválida`);
+                        console.warn(`🚨 Webhook rejeitado: signature inválida (header=${headerSource})`);
                         res.writeHead(403, { 'Content-Type': 'application/json' });
                         res.end(JSON.stringify({ error: 'Forbidden' }));
                         return;
