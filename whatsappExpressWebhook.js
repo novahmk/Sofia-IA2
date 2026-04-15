@@ -13,7 +13,17 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const WASENDERAPI_BASE_URL = process.env.WASENDERAPI_BASE_URL || 'https://www.wasenderapi.com/api';
 const WASENDERAPI_TOKEN = process.env.WASENDERAPI_TOKEN || ACCESS_TOKEN;
 
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+// Inicialização lazy do OpenAI — NÃO crasha no startup se a chave estiver ausente
+let openai = null;
+function getOpenAI() {
+  if (!openai) {
+    if (!OPENAI_API_KEY) {
+      throw new Error('OPENAI_API_KEY não configurada. Defina a variável de ambiente.');
+    }
+    openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+  }
+  return openai;
+}
 
 function rawBodySaver(req, res, buf, encoding) {
   if (buf && buf.length) {
@@ -46,7 +56,7 @@ function authenticateWebhookRequest(req) {
 }
 
 function createOpenAIResponse(userText) {
-  return openai.chat.completions.create({
+  return getOpenAI().chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [
       {
@@ -211,13 +221,18 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Limpar número (remover @s.whatsapp.net, @lid, whatsapp:, +, espaços)
+    // Limpar número para formato E.164 (ex: +5511999999999)
     from = String(from)
       .replace(/@s\.whatsapp\.net$/, '')
       .replace(/@lid$/, '')
       .replace(/^whatsapp:/, '')
-      .replace(/[\s+()-]/g, '')
+      .replace(/[\s()-]/g, '')
       .trim();
+
+    // Garantir que tem o prefixo + (E.164, exigido pela WASenderAPI)
+    if (from && !from.startsWith('+')) {
+      from = '+' + from;
+    }
 
     console.log(`💬 Mensagem de ${from}: "${texto}"`);
 
@@ -232,7 +247,16 @@ app.post('/webhook', async (req, res) => {
     await enviarMensagem(from, respostaIA);
 
   } catch (error) {
-    console.error('❌ ERRO ao processar:', error.response?.data || error.message || error);
+    console.error('❌ ERRO ao processar mensagem:');
+    console.error('  Tipo:', error.constructor?.name || 'Unknown');
+    console.error('  Mensagem:', error.message);
+    if (error.response) {
+      console.error('  HTTP Status:', error.response.status);
+      console.error('  Response:', JSON.stringify(error.response.data));
+    }
+    if (error.stack) {
+      console.error('  Stack:', error.stack.split('\n').slice(0, 3).join('\n'));
+    }
   }
 });
 
@@ -242,6 +266,12 @@ app.listen(PORT, () => {
   console.log(`📊 Dashboard: GET /dashboard`);
   console.log(`🏥 Health: GET /health`);
   console.log(`📡 WASenderAPI URL: ${WASENDERAPI_BASE_URL}`);
-  console.log(`🔑 Token configurado: ${WASENDERAPI_TOKEN ? 'SIM' : 'NÃO'}`);
-  console.log(`🔐 Webhook Secret configurado: ${WEBHOOK_SECRET ? 'SIM' : 'NÃO'}`);
+  console.log(`🔑 WASenderAPI Token: ${WASENDERAPI_TOKEN ? 'SIM (' + WASENDERAPI_TOKEN.substring(0, 8) + '...)' : '⚠️ NÃO CONFIGURADO'}`);
+  console.log(`🔐 Webhook Secret: ${WEBHOOK_SECRET ? 'SIM' : '⚠️ NÃO (aceitando tudo)'}`);
+  console.log(`🧠 OpenAI API Key: ${OPENAI_API_KEY ? 'SIM (' + OPENAI_API_KEY.substring(0, 8) + '...)' : '⚠️ NÃO CONFIGURADO'}`);
+  
+  // Validações de startup
+  if (!OPENAI_API_KEY) console.error('🚨 OPENAI_API_KEY ausente — bot não conseguirá gerar respostas!');
+  if (!WASENDERAPI_TOKEN) console.error('🚨 WASENDERAPI_TOKEN ausente — bot não conseguirá enviar mensagens!');
+  if (!WEBHOOK_SECRET) console.warn('⚠️ WASENDERAPI_WEBHOOK_SECRET ausente — webhook aceita requisições de qualquer origem');
 });
