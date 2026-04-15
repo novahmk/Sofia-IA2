@@ -96,7 +96,3 @@ builder = "NIXPACKS"
 startCommand = "node whatsappExpressWebhook.js"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
-
-[[ports]]
-port = 8080
-protocol = "http"
