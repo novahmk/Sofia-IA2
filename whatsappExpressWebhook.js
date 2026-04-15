@@ -313,8 +313,8 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Sofia IA rodando na porta ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Sofia IA rodando na porta ${PORT} (0.0.0.0)`);
   console.log(`🔗 Webhook: POST /webhook`);
   console.log(`📊 Dashboard: GET /dashboard`);
   console.log(`🏥 Health: GET /health`);
