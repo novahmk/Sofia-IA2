@@ -450,6 +450,28 @@ const server = http.createServer(async (req, res) => {
             return json(200, { success: true, message: 'Se o email existir, enviaremos o link de recuperação.' });
         }
 
+        // ===== WEBHOOK VERIFICATION (GET) =====
+        // Usado pela Quality API / WASenderAPI para validar o webhook endpoint
+        if (req.method === 'GET' && req.url.startsWith('/webhook')) {
+            const url = new URL(req.url, `http://${req.headers.host}`);
+            const mode = url.searchParams.get('hub.mode');
+            const token = url.searchParams.get('hub.verify_token');
+            const challenge = url.searchParams.get('hub.challenge');
+
+            const VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || process.env.WASENDERAPI_WEBHOOK_SECRET || 'verify-token-seguro';
+
+            if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+                console.log('✅ Webhook verificado com sucesso!');
+                res.writeHead(200, { 'Content-Type': 'text/plain' });
+                res.end(challenge);
+            } else {
+                console.warn('🚨 Webhook verification falhou: token inválido');
+                res.writeHead(403, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Forbidden' }));
+            }
+            return;
+        }
+
         // ===== WEBHOOK INBOUND MESSAGES (chat provider) =====
 
         if (req.method === 'POST' && (req.url === '/webhook' || req.url === '/api/messages')) {
