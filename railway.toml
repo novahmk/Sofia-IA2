@@ -94,7 +94,7 @@
 builder = "NIXPACKS"
 
 [deploy]
-startCommand = "node index.js"
+startCommand = "node index.js & node dashboard-server.js"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
