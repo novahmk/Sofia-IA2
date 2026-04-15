@@ -507,16 +507,34 @@ const server = http.createServer(async (req, res) => {
                             ? data.data.messages[0]
                             : data.data.messages;
                         const key = messageObject.key || {};
-                        const remote = key.remoteJid || key.senderPn || key.cleanedSenderPn || key.senderLid || '';
 
-                        if (typeof remote === 'string') {
+                        // Extrair número do remoteJid (formato: 5511965704958@s.whatsapp.net)
+                        const remote = key.remoteJid || '';
+                        if (remote && typeof remote === 'string') {
                             userPhone = remote.replace('@s.whatsapp.net', '').replace(/@.*$/, '').replace(/[^0-9]/g, '');
+                        }
+
+                        // Se não conseguiu via remoteJid, tentar outros campos
+                        if (!userPhone && key.senderPn) {
+                            userPhone = String(key.senderPn).replace(/[^0-9]/g, '');
                         }
                         if (!userPhone && key.cleanedSenderPn) {
                             userPhone = String(key.cleanedSenderPn).replace(/[^0-9]/g, '');
                         }
-                        if (!userPhone && key.senderLid) {
-                            userPhone = String(key.senderLid).replace(/[^0-9]/g, '');
+
+                        console.log(`🔍 Webhook data:`, {
+                            remoteJid: key.remoteJid,
+                            senderPn: key.senderPn,
+                            cleanedSenderPn: key.cleanedSenderPn,
+                            senderLid: key.senderLid,
+                            extractedPhone: userPhone,
+                            phoneLength: userPhone?.length
+                        });
+
+                        // Validar formato: deve ter 10+ dígitos (código país + DDD + número)
+                        if (userPhone && userPhone.length < 10) {
+                            console.warn(`⚠️ Número inválido extraído do webhook: ${userPhone} (menos de 10 dígitos) — descartando`);
+                            userPhone = '';
                         }
 
                         fromMe = Boolean(key.fromMe);
