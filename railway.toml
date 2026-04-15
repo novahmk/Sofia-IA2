@@ -5,11 +5,10 @@
 #
 # ARQUITETURA DO PROJETO:
 # ─────────────────────────────────────────────────────────────
-# Este é um servidor Node.js monolítico (sem Express) que opera como:
-#   1. Webhook receiver para WhatsApp via UAZAPI
-#   2. API REST com JWT auth para dashboard administrativo
-#   3. WebSocket server para real-time dashboard updates
-#   4. Motor de IA conversacional (GPT-4o-mini via OpenAI)
+# Servidor Express (whatsappExpressWebhook.js) que opera como:
+#   1. Webhook receiver para WhatsApp via WASenderAPI
+#   2. Dashboard simples
+#   3. Motor de IA conversacional (GPT-4o-mini via OpenAI)
 #
 # ESTRUTURA DE ROTAS (index.js):
 # ─────────────────────────────────────────────────────────────
@@ -94,7 +93,7 @@
 builder = "NIXPACKS"
 
 [deploy]
-startCommand = "node index.js"
+startCommand = "node whatsappExpressWebhook.js"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
