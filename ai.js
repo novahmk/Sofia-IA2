@@ -11,16 +11,16 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Armazena o histórico da conversa por número de telefone
+// Armazena o histórico da conversa por ID do usuário
 const chatHistories = {};
 
-// Armazena análise de intenção por número de telefone
+// Armazena análise de intenção por ID do usuário
 const customerIntents = {};
 
-// Armazena últimas respostas da Sofia por telefone (anti-repetição)
+// Armazena últimas respostas da Sofia por ID do usuário (anti-repetição)
 const lastResponses = {};
 
-// Armazena resumos de conversas antigas por telefone
+// Armazena resumos de conversas antigas por ID do usuário
 const conversationSummaries = {};
 
 // Limite máximo de mensagens no histórico (system prompt + summary + últimas N interações)
@@ -33,8 +33,8 @@ const COMPRESS_THRESHOLD = 12;
  * Comprime histórico antigo em um resumo e mantém apenas mensagens recentes.
  * Isso evita que a IA repita argumentos já feitos e reduz tokens.
  */
-async function compressAndTrimHistory(phoneNumber) {
-    const history = chatHistories[phoneNumber];
+async function compressAndTrimHistory(userId) {
+    const history = chatHistories[userId];
     if (!history || history.length <= MAX_HISTORY_LENGTH) return;
 
     const systemMessage = history[0];
@@ -45,7 +45,7 @@ async function compressAndTrimHistory(phoneNumber) {
 
     if (oldMessages.length < 4) {
         // Pouca coisa para resumir, só faz trim simples
-        chatHistories[phoneNumber] = [systemMessage, ...recentMessages];
+        chatHistories[userId] = [systemMessage, ...recentMessages];
         return;
     }
 
@@ -67,42 +67,42 @@ async function compressAndTrimHistory(phoneNumber) {
         });
 
         const summary = summaryResponse.choices[0]?.message?.content || '';
-        conversationSummaries[phoneNumber] = summary;
+        conversationSummaries[userId] = summary;
 
         // Reconstruir histórico: system + resumo como contexto + mensagens recentes
-        chatHistories[phoneNumber] = [
+        chatHistories[userId] = [
             systemMessage,
             { role: "user", content: `[RESUMO DA CONVERSA ANTERIOR]\n${summary}\n[FIM DO RESUMO]` },
             { role: "assistant", content: "Entendi, vou continuar a conversa a partir daqui." },
             ...recentMessages
         ];
 
-        console.log(`🧠 Histórico comprimido para ${phoneNumber}: resumo gerado (${oldMessages.length} msgs antigas → 1 resumo)`);
+        console.log(`🧠 Histórico comprimido para ${userId}: resumo gerado (${oldMessages.length} msgs antigas → 1 resumo)`);
     } catch (error) {
         // Fallback: trim simples se a compressão falhar
-        chatHistories[phoneNumber] = [systemMessage, ...recentMessages];
-        console.log(`🧹 Histórico podado (fallback) para ${phoneNumber}: ${history.length} → ${chatHistories[phoneNumber].length}`);
+        chatHistories[userId] = [systemMessage, ...recentMessages];
+        console.log(`🧹 Histórico podado (fallback) para ${userId}: ${history.length} → ${chatHistories[userId].length}`);
     }
 }
 
 /**
  * Registra resposta da Sofia para anti-repetição (mantém últimas 5)
  */
-function trackResponse(phoneNumber, response) {
-    if (!lastResponses[phoneNumber]) {
-        lastResponses[phoneNumber] = [];
+function trackResponse(userId, response) {
+    if (!lastResponses[userId]) {
+        lastResponses[userId] = [];
     }
-    lastResponses[phoneNumber].push(response);
-    if (lastResponses[phoneNumber].length > 5) {
-        lastResponses[phoneNumber].shift();
+    lastResponses[userId].push(response);
+    if (lastResponses[userId].length > 5) {
+        lastResponses[userId].shift();
     }
 }
 
 /**
  * Gera contexto anti-repetição baseado nas últimas respostas
  */
-function getAntiRepetitionContext(phoneNumber) {
-    const recent = lastResponses[phoneNumber];
+function getAntiRepetitionContext(userId) {
+    const recent = lastResponses[userId];
     if (!recent || recent.length < 2) return '';
 
     const recentSnippets = recent
@@ -180,11 +180,11 @@ function analyzeCustomerIntent(userMessage) {
 /**
  * Determina se a conversa deve ser escalada para um humano
  */
-function shouldEscalateToHuman(phoneNumber, userMessage) {
+function shouldEscalateToHuman(userId, userMessage) {
     const intent = analyzeCustomerIntent(userMessage);
     
     // Armazenar intent para referência futura
-    customerIntents[phoneNumber] = intent;
+    customerIntents[userId] = intent;
 
     // Escalação imediata se cliente pede explicitamente por humano
     if (intent.hasEscalationIntent) {
@@ -205,7 +205,7 @@ function shouldEscalateToHuman(phoneNumber, userMessage) {
     }
 
     // Escalação se cliente tem demanda específica muito clara após várias mensagens
-    const conversationLength = chatHistories[phoneNumber]?.length || 0;
+    const conversationLength = chatHistories[userId]?.length || 0;
     if (intent.hasSpecificDemand && conversationLength > 6 && intent.frustrationLevel > 0) {
         return {
             shouldEscalate: true,
@@ -224,8 +224,8 @@ function shouldEscalateToHuman(phoneNumber, userMessage) {
 const systemPrompt = `Você é Sofia, consultora de Terapia Capilar da Clínica Quality Hair (Vila Mariana, metrô Paraíso, SP).
 
 # COMO VOCÊ CONVERSA
-- Você é uma HUMANA conversando no WhatsApp, não um robô.
-- Responda em NO MÁXIMO 1-3 frases curtas (máximo 50 palavras). WhatsApp é chat, não e-mail.
+- Você é uma HUMANA conversando em um chat, não um robô.
+- Responda em NO MÁXIMO 1-3 frases curtas (máximo 50 palavras). Chat é conversacional, não e-mail.
 - Faça apenas UMA pergunta por mensagem.
 - NUNCA despeje informações que o cliente não pediu.
 - PRIMEIRO ouça e entenda. DEPOIS responda apenas o que foi perguntado.
@@ -276,24 +276,24 @@ Quando o cliente quiser agendar:
 - Repetir argumentos que já usou na conversa
 - Insistir depois que o cliente recusou
 - Ignorar a pergunta do cliente para puxar outro assunto`;
-async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
+async function getSofiaResponse(userId, userMessage, audioContext = null) {
     // ===== A/B TESTING — atribuir variante =====
-    const abVariant = abTesting.assignVariant(phoneNumber);
-    const abOverrides = abTesting.getOverrides(phoneNumber);
-    const abPatch = abTesting.getPromptPatch(phoneNumber);
+    const abVariant = abTesting.assignVariant(userId);
+    const abOverrides = abTesting.getOverrides(userId);
+    const abPatch = abTesting.getPromptPatch(userId);
     const effectivePrompt = abPatch ? systemPrompt + '\n' + abPatch : systemPrompt;
 
     // Inicializa o histórico se não existir
-    if (!chatHistories[phoneNumber]) {
-        console.log(`📝 Iniciando novo histórico para ${phoneNumber} [A/B: ${abVariant}]`);
-        chatHistories[phoneNumber] = [
+    if (!chatHistories[userId]) {
+        console.log(`📝 Iniciando novo histórico para ${userId} [A/B: ${abVariant}]`);
+        chatHistories[userId] = [
             { role: "system", content: effectivePrompt }
         ];
     }
 
     // ===== MEMÓRIA DO CLIENTE (compacta) =====
-    const clientMem = clientMemory.getClientMemory(phoneNumber);
-    const memoryContext = clientMemory.createMemoryContext(phoneNumber);
+    const clientMem = clientMemory.getClientMemory(userId);
+    const memoryContext = clientMemory.createMemoryContext(userId);
     
     console.log(`👤 Cliente: ${clientMem.personal.name || 'Desconhecido'}`);
 
@@ -320,7 +320,7 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
     }
 
     // ===== VERIFICAR ESCALAÇÃO =====
-    const escalation = shouldEscalateToHuman(phoneNumber, userMessage);
+    const escalation = shouldEscalateToHuman(userId, userMessage);
     if (escalation.shouldEscalate) {
         console.log(`🚨 ESCALAÇÃO DETECTADA - Razão: ${escalation.reason} | Prioridade: ${escalation.priority}`);
         
@@ -332,12 +332,12 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
         ];
 
         const randomEscalation = escalationMessages[Math.floor(Math.random() * escalationMessages.length)];
-        swop.recordError(phoneNumber, `ESCALAÇÃO: ${escalation.reason}`, 'ESCALATION_TO_HUMAN');
+        swop.recordError(userId, `ESCALAÇÃO: ${escalation.reason}`, 'ESCALATION_TO_HUMAN');
         return randomEscalation;
     }
 
     // ===== ANTI-REPETIÇÃO =====
-    const antiRepetition = getAntiRepetitionContext(phoneNumber);
+    const antiRepetition = getAntiRepetitionContext(userId);
 
     // ===== PREPARAR MENSAGEM — Contexto enxuto =====
     const contextParts = [];
@@ -371,7 +371,7 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
     }
 
     // Adiciona ao histórico
-    chatHistories[phoneNumber].push({ 
+    chatHistories[userId].push({ 
         role: "user", 
         content: fullUserMessage
     });
@@ -394,7 +394,7 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
         const response = await selfHealing.execute(
             () => openai.chat.completions.create({
                 model: "gpt-4o",
-                messages: chatHistories[phoneNumber],
+                messages: chatHistories[userId],
                 temperature: aiTemperature,
                 max_tokens: aiMaxTokens,
                 tools: functionCalling.getToolSchemas(),
@@ -404,14 +404,14 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
                 const adj = ctx.adjustments || {};
                 return openai.chat.completions.create({
                     model: "gpt-4o",
-                    messages: chatHistories[phoneNumber],
+                    messages: chatHistories[userId],
                     temperature: adj.temperature || aiTemperature,
                     max_tokens: adj.max_tokens || aiMaxTokens,
                     tools: functionCalling.getToolSchemas(),
                     tool_choice: 'auto'
                 });
             },
-            { phoneNumber, operation: 'openai_chat' }
+            { userId, operation: 'openai_chat' }
         );
 
         const requestLatency = Date.now() - requestStartTime;
@@ -430,7 +430,7 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
             console.log(`🔧 Funções chamadas pela IA:`);
             
             // Adicionar a mensagem da IA ao histórico
-            chatHistories[phoneNumber].push({
+            chatHistories[userId].push({
                 role: "assistant",
                 content: choice.message.content || '',
                 tool_calls: choice.message.tool_calls
@@ -451,7 +451,7 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
                 }
 
                 // Adicionar resultado ao histórico
-                chatHistories[phoneNumber].push({
+                chatHistories[userId].push({
                     role: "tool",
                     tool_call_id: toolCall.id,
                     content: JSON.stringify(functionResult)
@@ -468,7 +468,7 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
             
             const finalResponse = await openai.chat.completions.create({
                 model: "gpt-4o",
-                messages: chatHistories[phoneNumber],
+                messages: chatHistories[userId],
                 temperature: aiTemperature,
                 max_tokens: aiMaxTokens
             });
@@ -480,7 +480,7 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
             sofiaMessage = finalResponse.choices[0].message.content;
             
             // Adicionar ao histórico
-            chatHistories[phoneNumber].push({
+            chatHistories[userId].push({
                 role: "assistant",
                 content: sofiaMessage
             });
@@ -488,14 +488,14 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
         } else {
             // Resposta normal sem function calls
             sofiaMessage = choice.message.content;
-            chatHistories[phoneNumber].push({ role: "assistant", content: sofiaMessage });
+            chatHistories[userId].push({ role: "assistant", content: sofiaMessage });
         }
 
         // ===== COMPRESSÃO INTELIGENTE DO HISTÓRICO =====
-        await compressAndTrimHistory(phoneNumber);
+        await compressAndTrimHistory(userId);
 
         // ===== ANTI-REPETIÇÃO: Registrar resposta =====
-        trackResponse(phoneNumber, sofiaMessage);
+        trackResponse(userId, sofiaMessage);
 
         // ===== ATUALIZAR MEMÓRIA DO CLIENTE =====
         console.log(`📝 Atualizando memória do cliente...`);
@@ -503,24 +503,24 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
         // Registrar tópicos discutidos
         const lowerMsg = userMessage.toLowerCase();
         if (lowerMsg.includes('prec') || lowerMsg.includes('cust') || lowerMsg.includes('valor') || lowerMsg.includes('quanto')) {
-            clientMemory.recordTopicDiscussed(phoneNumber, 'preços_custos');
+            clientMemory.recordTopicDiscussed(userId, 'preços_custos');
         }
         if (lowerMsg.includes('calvic') || lowerMsg.includes('alopec') || lowerMsg.includes('queda') || lowerMsg.includes('cabelo')) {
-            clientMemory.recordTopicDiscussed(phoneNumber, 'saúde_capilar');
+            clientMemory.recordTopicDiscussed(userId, 'saúde_capilar');
         }
         if (lowerMsg.includes('mesoterap') || lowerMsg.includes('procedimento') || lowerMsg.includes('como funciona')) {
-            clientMemory.recordTopicDiscussed(phoneNumber, 'mesoterapia_explicação');
+            clientMemory.recordTopicDiscussed(userId, 'mesoterapia_explicação');
         }
         if (lowerMsg.includes('agend') || lowerMsg.includes('horár') || lowerMsg.includes('marc')) {
-            clientMemory.recordTopicDiscussed(phoneNumber, 'agendamento');
+            clientMemory.recordTopicDiscussed(userId, 'agendamento');
         }
         if (lowerMsg.includes('dói') || lowerMsg.includes('dor') || lowerMsg.includes('agulha') || lowerMsg.includes('medo')) {
-            clientMemory.recordTopicDiscussed(phoneNumber, 'medo_dor');
+            clientMemory.recordTopicDiscussed(userId, 'medo_dor');
         }
         
         // Registrar perguntas
         if (userMessage.includes('?')) {
-            clientMemory.recordQuestion(phoneNumber, userMessage);
+            clientMemory.recordQuestion(userId, userMessage);
         }
 
         // Atualizar sentimento baseado na intenção
@@ -531,7 +531,7 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
             escalation: 'negative'
         };
         if (sentimentMap[intent.priority]) {
-            clientMemory.updateSentiment(phoneNumber, sentimentMap[intent.priority]);
+            clientMemory.updateSentiment(userId, sentimentMap[intent.priority]);
         }
 
         // ===== LOGS FINAIS =====
@@ -549,15 +549,15 @@ async function getSofiaResponse(phoneNumber, userMessage, audioContext = null) {
         console.error(`❌ ERRO CRÍTICO [${errorType}]: ${errorMsg}`);
         console.error(`📌 Stack: ${error.stack}`);
 
-        swop.recordError(phoneNumber, errorMsg, errorType);
+        swop.recordError(userId, errorMsg, errorType);
 
         // Verificar se é erro de histórico muito longo e tentar corrigir
-        const healing = await selfHealing.analyze(error, null, { phoneNumber });
-        if (healing.recovered && healing.result?.action === 'trim_history' && chatHistories[phoneNumber]) {
-            const systemMsg = chatHistories[phoneNumber][0];
+        const healing = await selfHealing.analyze(error, null, { userId });
+        if (healing.recovered && healing.result?.action === 'trim_history' && chatHistories[userId]) {
+            const systemMsg = chatHistories[userId][0];
             const keep = healing.result.keepMessages || 10;
-            chatHistories[phoneNumber] = [systemMsg, ...chatHistories[phoneNumber].slice(-keep)];
-            console.log(`🔧 Histórico podado automaticamente para ${phoneNumber}`);
+            chatHistories[userId] = [systemMsg, ...chatHistories[userId].slice(-keep)];
+            console.log(`🔧 Histórico podado automaticamente para ${userId}`);
             return "Desculpa, precisei reorganizar minha memória aqui. Pode repetir, por favor?";
         }
 

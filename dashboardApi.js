@@ -210,10 +210,11 @@ function getDashboardData(rateLimits, messageQueues) {
  */
 function getServicesStatus(perf) {
     // Retorna status base (síncrono) — será sobrescrito pelo health check assíncrono
+    const messagingLabel = process.env.WASENDERAPI_BASE_URL ? 'WASenderAPI Chat' : 'UAZAPI WhatsApp';
     return {
         sofia: { status: 'online', label: 'Sofia IA (Node.js)', latencyMs: null, lastChecked: new Date().toISOString(), detail: `Uptime: ${formatUptime(process.uptime())}` },
         openai: { status: 'unknown', label: 'OpenAI GPT-4o', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
-        uazapi: { status: 'unknown', label: 'UAZAPI WhatsApp', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
+        uazapi: { status: 'unknown', label: messagingLabel, latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
         feegow: { status: 'unknown', label: 'Feegow Agendamentos', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
         calendar: { status: 'unknown', label: 'Google Calendar', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
         database: { status: 'unknown', label: 'Banco de Dados', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
@@ -332,6 +333,51 @@ async function checkUazapi() {
 }
 
 /**
+ * Verifica conexão REAL com o WASenderAPI
+ */
+async function checkWasenderapi() {
+    const token = process.env.WASENDERAPI_TOKEN;
+    const baseUrl = process.env.WASENDERAPI_BASE_URL;
+    const statusPath = process.env.WASENDERAPI_STATUS_PATH || '/status';
+    if (!token) {
+        return { status: 'error', latencyMs: 0, detail: 'WASENDERAPI_TOKEN não configurado' };
+    }
+    if (!baseUrl) {
+        return { status: 'error', latencyMs: 0, detail: 'WASENDERAPI_BASE_URL não configurado' };
+    }
+    try {
+        const url = new URL(baseUrl);
+        const path = statusPath.startsWith('/') ? statusPath : `/${statusPath}`;
+        const result = await httpCheck({
+            hostname: url.hostname,
+            port: url.port || (url.protocol === 'https:' ? 443 : 80),
+            path,
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${token}` }
+        }, 8000);
+
+        if (result.ok) {
+            let detail = `API respondeu em ${result.latencyMs}ms`;
+            try {
+                const data = JSON.parse(result.body);
+                if (data.status) {
+                    detail = `${data.status}${data.message ? ` — ${data.message}` : ''} (${result.latencyMs}ms)`;
+                }
+            } catch (e) {
+                // não crítico se o corpo não for JSON
+            }
+            return { status: 'online', latencyMs: result.latencyMs, detail };
+        }
+        if (result.statusCode === 401 || result.statusCode === 403) {
+            return { status: 'error', latencyMs: result.latencyMs, detail: 'Token inválido (401/403)' };
+        }
+        return { status: 'error', latencyMs: result.latencyMs, detail: result.detail || `Erro HTTP ${result.statusCode}` };
+    } catch (err) {
+        return { status: 'error', latencyMs: 0, detail: err.message };
+    }
+}
+
+/**
  * Verifica conexão REAL com o Feegow
  */
 async function checkFeegow() {
@@ -424,18 +470,20 @@ async function runHealthChecks() {
     }
 
     const timestamp = new Date().toISOString();
-    const [openai, uazapi, feegowResult, calendar, database] = await Promise.all([
+    const messagingCheck = process.env.WASENDERAPI_BASE_URL ? checkWasenderapi() : checkUazapi();
+    const [openai, messaging, feegowResult, calendar, database] = await Promise.all([
         checkOpenAI(),
-        checkUazapi(),
+        messagingCheck,
         checkFeegow(),
         checkGoogleCalendar(),
         checkDatabase(),
     ]);
 
+    const messagingLabel = process.env.WASENDERAPI_BASE_URL ? 'WASenderAPI Chat' : 'UAZAPI WhatsApp';
     const result = {
         sofia: { status: 'online', label: 'Sofia IA (Node.js)', latencyMs: 0, lastChecked: timestamp, detail: `Uptime: ${formatUptime(process.uptime())}` },
         openai: { ...openai, label: 'OpenAI GPT-4o', lastChecked: timestamp },
-        uazapi: { ...uazapi, label: 'UAZAPI WhatsApp', lastChecked: timestamp },
+        uazapi: { ...messaging, label: messagingLabel, lastChecked: timestamp },
         feegow: { ...feegowResult, label: 'Feegow Agendamentos', lastChecked: timestamp },
         calendar: { ...calendar, label: 'Google Calendar', lastChecked: timestamp },
         database: { ...database, label: 'Banco de Dados', lastChecked: timestamp },

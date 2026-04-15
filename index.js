@@ -3,10 +3,10 @@
  * ═══════════════════════════════════════════════════════════════
  * 
  * Servidor HTTP nativo Node.js (sem Express) que opera como:
- *   1. Webhook receiver para WhatsApp via UAZAPI
+ *   1. Webhook receiver para chat via UAZAPI
  *   2. API REST com JWT auth para dashboard administrativo  
  *   3. WebSocket server para real-time dashboard updates
- *   4. Motor de IA conversacional (GPT-4o-mini)
+ *   4. Motor de IA conversacional (GPT-4o)
  * 
  * PADRÃO DE ROTAS:
  *   Todas as rotas estão neste arquivo, no callback de http.createServer.
@@ -253,7 +253,7 @@ async function processIncomingMessage(webhookData) {
                     const audioData = await selfHealing.execute(
                         () => transcribeAudioFromUrl(audioUrl, userPhone),
                         () => transcribeAudioFromUrl(audioUrl, userPhone),
-                        { phoneNumber: userPhone, operation: 'audio_transcription' }
+                        { userId: userPhone, operation: 'audio_transcription' }
                     );
                     userText = audioData.text;
                     audioContext = createAudioContext(audioData);
@@ -354,7 +354,7 @@ async function processIncomingMessage(webhookData) {
             auditLogger.error(userPhone, error.message, error.name || 'PROCESSING_ERROR');
 
             // Self-healing: analisar se o erro é recuperável
-            const healing = await selfHealing.analyze(error, null, { phoneNumber: userPhone, operation: 'process_message' });
+            const healing = await selfHealing.analyze(error, null, { userId: userPhone, operation: 'process_message' });
             console.log(`🔧 Self-Healing análise: ${healing.analysis}`);
             auditLogger.selfHealing(userPhone, error.name, healing.recovered, healing.analysis);
             
@@ -450,57 +450,82 @@ const server = http.createServer(async (req, res) => {
             return json(200, { success: true, message: 'Se o email existir, enviaremos o link de recuperação.' });
         }
 
-        // ===== WEBHOOK UAZAPI (no auth — called by UAZAPI service) =====
+        // ===== WEBHOOK INBOUND MESSAGES (chat provider) =====
 
         if (req.method === 'POST' && (req.url === '/webhook' || req.url === '/api/messages')) {
             let body = '';
             req.on('data', chunk => { body += chunk; });
             req.on('end', () => {
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end('{"status":"received"}');
-
                 try {
+                    // Validar webhook signature
+                    const signature = req.headers['x-webhook-signature'];
+                    const webhookSecret = process.env.WASENDERAPI_WEBHOOK_SECRET;
+                    
+                    if (webhookSecret && (!signature || signature !== webhookSecret)) {
+                        console.warn(`🚨 Webhook rejeitado: signature inválida`);
+                        res.writeHead(403, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: 'Forbidden' }));
+                        return;
+                    }
+
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end('{"status":"received"}');
+
                     const data = JSON.parse(body);
-                    if (data.fromMe) return;
-                    if (data.isGroup) return;
+                    const isWasender = data.event === 'messages.received' && data.data && data.data.messages;
 
-                    const userPhone = (data.phone || data.from || data.sender || '')
-                        .replace('@s.whatsapp.net', '')
-                        .replace('@c.us', '')
-                        .replace(/[^0-9]/g, '');
+                    let userPhone = '';
+                    let fromMe = false;
+                    let isGroup = false;
+                    let messageText = '';
+
+                    if (isWasender) {
+                        const messageObject = Array.isArray(data.data.messages)
+                            ? data.data.messages[0]
+                            : data.data.messages;
+                        const key = messageObject.key || {};
+                        const remote = key.remoteJid || key.senderPn || key.cleanedSenderPn || key.senderLid || '';
+
+                        if (typeof remote === 'string') {
+                            userPhone = remote.replace('@s.whatsapp.net', '').replace(/@.*$/, '').replace(/[^0-9]/g, '');
+                        }
+                        if (!userPhone && key.cleanedSenderPn) {
+                            userPhone = String(key.cleanedSenderPn).replace(/[^0-9]/g, '');
+                        }
+                        if (!userPhone && key.senderLid) {
+                            userPhone = String(key.senderLid).replace(/[^0-9]/g, '');
+                        }
+
+                        fromMe = Boolean(key.fromMe);
+                        isGroup = String(key.remoteJid || '').endsWith('@g.us');
+                        messageText = messageObject.messageBody || messageObject.message?.conversation || '';
+                    } else {
+                        if (data.fromMe) return;
+                        if (data.isGroup) return;
+
+                        userPhone = (data.phone || data.from || data.sender || '')
+                            .replace('@s.whatsapp.net', '')
+                            .replace('@c.us', '')
+                            .replace(/[^0-9]/g, '');
+                        messageText = data.message?.text || data.text?.message || data.body || (typeof data.message === 'string' ? data.message : '');
+                    }
+
                     if (!userPhone) return;
+                    if (fromMe) return;
+                    if (isGroup) return;
+                    if (!messageText) return;
 
-                    console.log(`\n📩 Webhook UAZAPI recebido de ${userPhone}`);
+                    console.log(`\n📩 Webhook recebido de ${userPhone}`);
 
                     const webhookData = {
                         phone: userPhone,
-                        fromMe: false,
-                        isGroup: false,
+                        fromMe,
+                        isGroup,
                         text: {
-                            message: data.message?.text || data.text?.message || data.body || (typeof data.message === 'string' ? data.message : ''),
-                            body: data.message?.text || data.text?.message || data.body || (typeof data.message === 'string' ? data.message : '')
+                            message: messageText,
+                            body: messageText
                         }
                     };
-
-                    const audioData = data.audio || data.message?.audio;
-                    const imageData = data.image || data.message?.image;
-                    const videoData = data.video || data.message?.video;
-                    const docData = data.document || data.message?.document;
-
-                    if (audioData) {
-                        const audioUrl = audioData.url || audioData.audioUrl || audioData.fileUrl || '';
-                        webhookData.audio = { audioUrl, fileUrl: audioUrl, url: audioUrl };
-                    } else if (imageData) {
-                        webhookData.image = { imageUrl: imageData.url || imageData.imageUrl || '' };
-                    } else if (videoData) {
-                        webhookData.video = { videoUrl: videoData.url || videoData.videoUrl || '' };
-                    } else if (docData) {
-                        webhookData.document = { documentUrl: docData.url || docData.documentUrl || '' };
-                    }
-
-                    if (!webhookData.text.message && !webhookData.audio && !webhookData.image && !webhookData.video && !webhookData.document) {
-                        return;
-                    }
 
                     // Emit WS event for dashboard
                     wsManager.emitNewMessage({ phone: userPhone, totalToday: (kpiTracker.getReport().overview?.totalMessages || 0) });
@@ -508,7 +533,7 @@ const server = http.createServer(async (req, res) => {
                     processIncomingMessage(webhookData);
 
                 } catch (parseError) {
-                    console.error('❌ Erro ao parsear webhook UAZAPI:', parseError.message);
+                    console.error('❌ Erro ao parsear webhook:', parseError.message);
                 }
             });
             return;
@@ -987,7 +1012,7 @@ function timeAgo(dateStr) {
 async function start() {
     console.log('\n======================================================');
     console.log('🤖 SOFIA AGENT - QUALITY HAIR');
-    console.log('📡 Modo: UAZAPI WhatsApp Webhook');
+    console.log('📡 Modo: Webhook chat provider');
     console.log('======================================================\n');
 
     // Verificar status do cliente de mensagens
