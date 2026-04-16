@@ -327,10 +327,10 @@ if (knowledgeBase && typeof knowledgeBase.initialize === 'function') {
 }
 
 // ── Start ──
-console.log(`📌 [BOOT] Bind na porta ${PORT}...`);
+console.log(`📌 [BOOT] Bind 0.0.0.0:${PORT}...`);
 
-const server = app.listen(PORT, () => {
-  console.log(`🚀 Sofia IA rodando na porta ${PORT}`);
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Sofia IA rodando em 0.0.0.0:${PORT}`);
   console.log(`📡 WASenderAPI: ${WASENDERAPI_BASE_URL}`);
   console.log(`🔑 Token: ${WASENDERAPI_TOKEN ? 'SIM' : '⚠️ NÃO'}`);
   console.log(`🔐 Secret: ${WEBHOOK_SECRET ? 'SIM' : '⚠️ NÃO'}`);
