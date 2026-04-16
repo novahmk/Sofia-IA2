@@ -1,11 +1,11 @@
-// ── Crash handlers — PRIMEIRO para capturar qualquer erro no startup ──
+// ── Crash handlers — NÃO deixa o processo morrer ──
 process.on('uncaughtException', (err) => {
-  console.error('💀 UNCAUGHT EXCEPTION:', err.message);
-  console.error(err.stack);
-  process.exit(1);
+  console.error('💥 UNCAUGHT EXCEPTION:', err);
+  // NÃO deixa o processo morrer
 });
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('💀 UNHANDLED REJECTION:', reason);
+process.on('unhandledRejection', (reason) => {
+  console.error('💥 UNHANDLED REJECTION:', reason);
+  // NÃO deixa o processo morrer
 });
 
 require('dotenv').config();
