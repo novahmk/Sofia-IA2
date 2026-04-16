@@ -1038,68 +1038,38 @@ async function start() {
     console.log('📡 Modo: Webhook chat provider');
     console.log('======================================================\n');
 
-    // Verificar status do cliente de mensagens
+    // Subir servidor PRIMEIRO — Railway precisa do /health respondendo rápido
+    server.listen(WEBHOOK_PORT, () => {
+        wsManager.init(server);
+        console.log(`\n🚀 Sofia IA rodando na porta ${WEBHOOK_PORT}`);
+        auditLogger.startup();
+    });
+
+    // Inicializar coisas pesadas DEPOIS, em background
     try {
         await auth.authReady;
         console.log('🔐 Auth: Sistema de autenticação inicializado');
     } catch (err) {
-        console.warn('⚠️ Auth: Falha ao inicializar autenticação:', err.message);
+        console.warn('⚠️ Auth:', err.message);
     }
 
     try {
-        const status = await messaging.getStatus();
-        console.log('📱 Status Messaging:', JSON.stringify(status));
+        await messaging.getStatus();
     } catch (err) {
-        console.warn(`⚠️ Não foi possível verificar status do messaging: ${err.message}`);
+        console.warn('⚠️ Messaging:', err.message);
     }
 
-    // Inicializar base de conhecimento
-    try {
-        await knowledgeBase.initialize();
-    } catch (err) {
-        console.error('⚠️ Falha ao inicializar KB:', err.message);
-    }
-
-    // Inicializar Feegow API
-    if (feegow.isConfigured()) {
-        try {
-            const procedures = await feegow.listProcedures();
-            console.log(`📋 Feegow conectado: ${procedures.length} procedimentos disponíveis`);
-            procedures.forEach(p => console.log(`   - ${p.nome}: R$${p.valor.toFixed(2)} (${p.tempo}min)`));
-        } catch (err) {
-            console.error(`⚠️ Falha ao conectar Feegow: ${err.message}`);
-        }
-    } else {
-        console.warn('⚠️ FEEGOW_TOKEN não configurado — agendamentos via Feegow desabilitados');
-    }
-
-    // Subir servidor webhook
-    server.listen(WEBHOOK_PORT, () => {
-        // Inicializar WebSocket no server HTTP
-        wsManager.init(server);
-
-        console.log(`\n🌐 Webhook server rodando na porta ${WEBHOOK_PORT}`);
-        console.log(`   POST http://localhost:${WEBHOOK_PORT}/webhook`);
-        console.log(`   POST http://localhost:${WEBHOOK_PORT}/api/messages`);
-        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/health`);
-        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/dashboard`);
-        console.log(`   POST http://localhost:${WEBHOOK_PORT}/api/auth/login`);
-        console.log(`   POST http://localhost:${WEBHOOK_PORT}/api/auth/signup`);
-        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/overview`);
-        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/conversations`);
-        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/leads`);
-        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/appointments`);
-        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/kpis`);
-        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/ab-test`);
-        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/system`);
-        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/security`);
-        console.log(`   GET  http://localhost:${WEBHOOK_PORT}/api/dashboard/knowledge-base`);
-        console.log(`   WS   ws://localhost:${WEBHOOK_PORT}/ws/dashboard`);
-        console.log('\n✅ Sofia está pronta para atender!');
-        auditLogger.startup();
-        console.log('📌 Configure a URL do webhook na sua API de mensagens:');
-        console.log(`   https://seu-dominio.com/webhook\n`);
+    // KB em background — não bloqueia o boot
+    knowledgeBase.initialize().catch(err => {
+        console.error('⚠️ KB:', err.message);
     });
+
+    // Feegow em background
+    if (feegow.isConfigured()) {
+        feegow.listProcedures().catch(err => {
+            console.error('⚠️ Feegow:', err.message);
+        });
+    }
 }
 
 // Exibe relatórios a cada 5 minutos
@@ -1136,8 +1106,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 process.on('uncaughtException', (error) => {
     console.error('⚠️ Uncaught Exception:', error.message);
-    console.error('💀 Erro fatal. Encerrando...');
-    process.exit(1);
+    // NÃO mata o processo — mantém container vivo no Railway
 });
 
 // Inicia o servidor
