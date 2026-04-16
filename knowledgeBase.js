@@ -207,6 +207,11 @@ class KnowledgeBase {
             });
 
             const embedding = response.data[0].embedding;
+
+            // Limitar cache a 200 entradas
+            const keys = Object.keys(this.embeddingsCache);
+            if (keys.length > 200) delete this.embeddingsCache[keys[0]];
+
             this.embeddingsCache[cacheKey] = embedding;
 
             return embedding;

@@ -373,7 +373,8 @@ async function getSofiaResponse(userId, userMessage, audioContext = null) {
     // Adiciona ao histórico
     chatHistories[userId].push({ 
         role: "user", 
-        content: fullUserMessage
+        content: fullUserMessage,
+        _ts: Date.now()
     });
     
     console.log(`💬 Processando (contextos: ${contextParts.length}, RAG: ${needsRag})...`);
@@ -564,5 +565,20 @@ async function getSofiaResponse(userId, userMessage, audioContext = null) {
         return "Desculpa! Tive um problema com minha conexão aqui. Pode tentar novamente em um momento?";
     }
 }
+
+// Limpa históricos de usuários inativos há mais de 2 horas
+setInterval(() => {
+    const now = Date.now();
+    const TTL = 2 * 60 * 60 * 1000;
+    for (const userId of Object.keys(chatHistories)) {
+        const last = chatHistories[userId]?.slice(-1)[0]?._ts || 0;
+        if (now - last > TTL) {
+            delete chatHistories[userId];
+            delete lastResponses[userId];
+            delete customerIntents[userId];
+            delete conversationSummaries[userId];
+        }
+    }
+}, 30 * 60 * 1000);
 
 module.exports = { getSofiaResponse, analyzeCustomerIntent, shouldEscalateToHuman };

@@ -74,6 +74,19 @@ const rateLimits = {};
 const RATE_LIMIT_WINDOW_MS = 60000; // 1 minuto
 const RATE_LIMIT_MAX_MESSAGES = 10; // máximo de mensagens por janela
 
+// Limpa usuários inativos a cada 1 hora
+setInterval(() => {
+    const now = Date.now();
+    const TTL = 2 * 60 * 60 * 1000; // 2 horas
+    for (const phone of Object.keys(messageQueues)) {
+        delete messageQueues[phone];
+    }
+    for (const phone of Object.keys(rateLimits)) {
+        const last = rateLimits[phone].timestamps?.slice(-1)[0] || 0;
+        if (now - last > TTL) delete rateLimits[phone];
+    }
+}, 60 * 60 * 1000);
+
 /**
  * Verifica se o usuário excedeu o rate limit
  */
@@ -1074,10 +1087,10 @@ async function start() {
 
 // Exibe relatórios a cada 5 minutos
 setInterval(() => {
-    swop.printHealthReport();
-    selfHealing.printReport();
-    kpiTracker.printReport();
-    abTesting.printReport();
+    try { swop.printHealthReport(); } catch(e) {}
+    try { selfHealing.printReport(); } catch(e) {}
+    try { kpiTracker.printReport(); } catch(e) {}
+    try { abTesting.printReport(); } catch(e) {}
 }, 5 * 60 * 1000);
 
 // Graceful shutdown

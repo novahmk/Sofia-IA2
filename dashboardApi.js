@@ -439,23 +439,22 @@ async function checkGoogleCalendar() {
 /**
  * Verifica Database (PostgreSQL ou local)
  */
+let _pgPool = null;
 async function checkDatabase() {
     const dbUrl = process.env.DATABASE_URL;
     if (!dbUrl) {
-        return { status: 'warning', latencyMs: 0, detail: 'Usando cache local em memória (PostgreSQL não configurado)' };
+        return { status: 'warning', latencyMs: 0, detail: 'PostgreSQL não configurado' };
     }
     try {
-        const { Pool } = require('pg');
-        const pool = new Pool({ connectionString: dbUrl, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 5000 });
+        if (!_pgPool) {
+            const { Pool } = require('pg');
+            _pgPool = new Pool({ connectionString: dbUrl, ssl: { rejectUnauthorized: false }, max: 2 });
+        }
         const start = Date.now();
-        const client = await pool.connect();
-        const res = await client.query('SELECT 1 AS alive');
-        client.release();
-        await pool.end();
-        const latencyMs = Date.now() - start;
-        return { status: 'online', latencyMs, detail: `PostgreSQL respondeu em ${latencyMs}ms` };
+        await _pgPool.query('SELECT 1');
+        return { status: 'online', latencyMs: Date.now() - start, detail: 'PostgreSQL OK' };
     } catch (err) {
-        return { status: 'error', latencyMs: 0, detail: `Falha na conexão: ${err.message}` };
+        return { status: 'error', latencyMs: 0, detail: err.message };
     }
 }
 
