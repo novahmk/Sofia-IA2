@@ -132,7 +132,7 @@ function checkRateLimit(phone) {
 
 // ── Rotas ──
 app.get('/', (req, res) => res.json({ status: 'ok' }));
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/health', (req, res) => res.json({ status: 'ok', time: Date.now() }));
 
 app.get('/dashboard', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -302,17 +302,7 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// ── Knowledge Base em background (não bloqueia boot) ──
-if (knowledgeBase && typeof knowledgeBase.initialize === 'function') {
-  setTimeout(() => {
-    console.log('📚 Inicializando Knowledge Base (background)...');
-    knowledgeBase.initialize()
-      .then(() => console.log('✅ Knowledge Base pronta'))
-      .catch(e => console.warn('⚠️ KB falhou:', e.message));
-  }, 3000);
-}
-
-// ── Start ──
+// ── Start (PRIMEIRO — antes de qualquer inicialização pesada) ──
 console.log(`📌 [BOOT] Bind 0.0.0.0:${PORT}...`);
 
 const server = app.listen(PORT, '0.0.0.0', () => {
@@ -328,5 +318,14 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 
 server.on('error', (err) => {
   console.error(`💀 ERRO listen porta ${PORT}:`, err.message);
-  process.exit(1);
 });
+
+// ── Knowledge Base em background (não bloqueia boot) ──
+if (knowledgeBase && typeof knowledgeBase.initialize === 'function') {
+  setTimeout(() => {
+    console.log('📚 Inicializando Knowledge Base (background)...');
+    knowledgeBase.initialize()
+      .then(() => console.log('✅ Knowledge Base pronta'))
+      .catch(e => console.warn('⚠️ KB falhou:', e.message));
+  }, 3000);
+}
