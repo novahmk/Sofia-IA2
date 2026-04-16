@@ -328,10 +328,10 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-console.log(`📌 [BOOT] Tentando bind na porta ${PORT} (0.0.0.0)...`);
+console.log(`📌 [BOOT] Tentando bind na porta ${PORT}...`);
 
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Sofia IA rodando na porta ${PORT} (0.0.0.0)`);
+const server = app.listen(PORT, () => {
+  console.log(`🚀 Sofia IA rodando na porta ${PORT}`);
   console.log(`🔗 Webhook: POST /webhook`);
   console.log(`📊 Dashboard: GET /dashboard`);
   console.log(`🏥 Health: GET /health`);

@@ -2,7 +2,7 @@
   "name": "sofia-agent",
   "version": "1.0.0",
   "description": "Consultora digital Quality Hair",
-  "main": "index.js",
+  "main": "whatsappExpressWebhook.js",
   "scripts": {
     "start": "node whatsappExpressWebhook.js",
     "start:webhook": "node whatsappExpressWebhook.js"
