@@ -131,22 +131,8 @@ function checkRateLimit(phone) {
 }
 
 // ── Rotas ──
-app.get('/', (req, res) => res.send('✅ SOFIA IA - Quality Hair está ONLINE!'));
-
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    uptime: process.uptime(),
-    modules: {
-      ai: !!getSofiaResponse,
-      inputSanitizer: !!inputSanitizer,
-      topicBlacklist: !!topicBlacklist,
-      conversationManager: !!conversationManager,
-      clientMemory: !!clientMemory,
-      knowledgeBase: !!knowledgeBase,
-    }
-  });
-});
+app.get('/', (req, res) => res.json({ status: 'ok' }));
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 app.get('/dashboard', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
