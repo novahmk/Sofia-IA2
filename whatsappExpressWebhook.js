@@ -8,346 +8,339 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('💀 UNHANDLED REJECTION:', reason);
 });
 
+require('dotenv').config();
+
 console.log('📌 [BOOT] Iniciando imports...');
 const express = require('express');
-console.log('📌 [BOOT] express OK');
 const axios = require('axios');
-console.log('📌 [BOOT] axios OK');
-const { OpenAI } = require('openai');
-console.log('📌 [BOOT] openai OK');
 const crypto = require('crypto');
-console.log('📌 [BOOT] crypto OK');
+console.log('📌 [BOOT] express/axios/crypto OK');
 
+// ── Módulos da Sofia (try/catch para não crashar o boot) ──
+let getSofiaResponse = null;
+let inputSanitizer = null;
+let topicBlacklist = null;
+let conversationManager = null;
+let clientMemory = null;
+let kpiTracker = null;
+let auditLogger = null;
+let knowledgeBase = null;
+let intentFlow = null;
+
+try {
+  const ai = require('./ai');
+  getSofiaResponse = ai.getSofiaResponse;
+  console.log('📌 [BOOT] ai.js OK (Sofia completa)');
+} catch (e) {
+  console.warn('⚠️ [BOOT] ai.js falhou:', e.message);
+}
+
+try { inputSanitizer = require('./inputSanitizer'); console.log('📌 [BOOT] inputSanitizer OK'); } catch (e) { console.warn('⚠️ [BOOT] inputSanitizer falhou:', e.message); }
+try { topicBlacklist = require('./topicBlacklist'); console.log('📌 [BOOT] topicBlacklist OK'); } catch (e) { console.warn('⚠️ [BOOT] topicBlacklist falhou:', e.message); }
+try { conversationManager = require('./conversationManager'); console.log('📌 [BOOT] conversationManager OK'); } catch (e) { console.warn('⚠️ [BOOT] conversationManager falhou:', e.message); }
+try { clientMemory = require('./clientMemory'); console.log('📌 [BOOT] clientMemory OK'); } catch (e) { console.warn('⚠️ [BOOT] clientMemory falhou:', e.message); }
+try { kpiTracker = require('./kpiTracker'); console.log('📌 [BOOT] kpiTracker OK'); } catch (e) { console.warn('⚠️ [BOOT] kpiTracker falhou:', e.message); }
+try { auditLogger = require('./auditLogger'); console.log('📌 [BOOT] auditLogger OK'); } catch (e) { console.warn('⚠️ [BOOT] auditLogger falhou:', e.message); }
+try { knowledgeBase = require('./knowledgeBase'); console.log('📌 [BOOT] knowledgeBase OK'); } catch (e) { console.warn('⚠️ [BOOT] knowledgeBase falhou:', e.message); }
+try { intentFlow = require('./intentFlow'); console.log('📌 [BOOT] intentFlow OK'); } catch (e) { console.warn('⚠️ [BOOT] intentFlow falhou:', e.message); }
+
+console.log('📌 [BOOT] Imports concluídos');
+
+// ── Configuração ──
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-const ACCESS_TOKEN = process.env.API_ACCESS_TOKEN;
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const WEBHOOK_SECRET = process.env.WASENDERAPI_WEBHOOK_SECRET || process.env.WEBHOOK_SECRET;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const WASENDERAPI_BASE_URL = process.env.WASENDERAPI_BASE_URL || 'https://www.wasenderapi.com/api';
-const WASENDERAPI_TOKEN = process.env.WASENDERAPI_TOKEN || ACCESS_TOKEN;
+const WASENDERAPI_TOKEN = process.env.WASENDERAPI_TOKEN || process.env.API_ACCESS_TOKEN;
 
-// Inicialização lazy do OpenAI — NÃO crasha no startup se a chave estiver ausente
-let openai = null;
-function getOpenAI() {
-  if (!openai) {
-    if (!OPENAI_API_KEY) {
-      throw new Error('OPENAI_API_KEY não configurada. Defina a variável de ambiente.');
-    }
-    openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+// ── Fallback OpenAI (caso ai.js não carregue) ──
+let _openai = null;
+function getFallbackOpenAI() {
+  if (!_openai) {
+    if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY não configurada');
+    const { OpenAI } = require('openai');
+    _openai = new OpenAI({ apiKey: OPENAI_API_KEY });
   }
-  return openai;
+  return _openai;
 }
 
+function fallbackResponse(userText) {
+  return getFallbackOpenAI().chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: 'Você é Sofia, consultora da Clínica Quality Hair (Vila Mariana, SP). Responda em português brasileiro, curta e amigável. Máximo 3 frases.' },
+      { role: 'user', content: userText },
+    ],
+    max_tokens: 300,
+    temperature: 0.7,
+  }).then(c => c.choices?.[0]?.message?.content?.trim());
+}
+
+// ── Middleware ──
 function rawBodySaver(req, res, buf, encoding) {
-  if (buf && buf.length) {
-    req.rawBody = buf.toString(encoding || 'utf8');
-  }
+  if (buf && buf.length) req.rawBody = buf.toString(encoding || 'utf8');
 }
-
 app.use(express.json({ verify: rawBodySaver, limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, verify: rawBodySaver, limit: '1mb' }));
 
+// ── Auth ──
 function safeCompare(a, b) {
   if (!a || !b || a.length !== b.length) return false;
   return crypto.timingSafeEqual(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'));
 }
 
 function authenticateWebhookRequest(req) {
-  // WASenderAPI envia o WASENDERAPI_WEBHOOK_SECRET no header X-Webhook-Signature
-  if (!WEBHOOK_SECRET) {
-    // Se não configurou secret, aceita tudo (dev/teste)
-    return true;
-  }
-
+  if (!WEBHOOK_SECRET) return true;
   const signature = req.header('x-webhook-signature') || '';
-  if (safeCompare(signature, WEBHOOK_SECRET)) {
-    return true;
-  }
-
-  console.warn(`⁉️ Webhook rejeitado: X-Webhook-Signature inválido ou ausente`);
+  if (safeCompare(signature, WEBHOOK_SECRET)) return true;
+  console.warn('⁉️ Webhook rejeitado: X-Webhook-Signature inválido');
   return false;
 }
 
-function createOpenAIResponse(userText) {
-  return getOpenAI().chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [
-      {
-        role: 'system',
-        content:
-          'Você é Sofia, uma assistente útil, educada e amigável. Responda sempre em português brasileiro de forma natural.',
-      },
-      { role: 'user', content: userText },
-    ],
-    max_tokens: 500,
-    temperature: 0.7,
-  });
-}
-
+// ── Envio via WASenderAPI ──
 async function enviarMensagem(to, text) {
-  if (!WASENDERAPI_TOKEN) {
-    throw new Error('WASENDERAPI_TOKEN não configurado! Defina no Railway com o API Key da sessão WhatsApp.');
-  }
-
+  if (!WASENDERAPI_TOKEN) throw new Error('WASENDERAPI_TOKEN não configurado!');
   const sendUrl = `${WASENDERAPI_BASE_URL.replace(/\/$/, '')}/send-message`;
-  const payload = { to, text };
 
-  console.log(`📤 WASenderAPI request:`);
-  console.log(`  URL: ${sendUrl}`);
-  console.log(`  Auth: Bearer ${WASENDERAPI_TOKEN.substring(0, 12)}...`);
-  console.log(`  Payload: ${JSON.stringify(payload).substring(0, 300)}`);
-
+  console.log(`📤 WASenderAPI: ${sendUrl} → ${to}`);
   try {
-    const response = await axios.post(sendUrl, payload, {
-      headers: {
-        Authorization: `Bearer ${WASENDERAPI_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
+    const response = await axios.post(sendUrl, { to, text }, {
+      headers: { Authorization: `Bearer ${WASENDERAPI_TOKEN}`, 'Content-Type': 'application/json' },
       timeout: 30000,
     });
-
-    console.log(`✅ WASenderAPI response: HTTP ${response.status}`);
-    console.log(`  Data: ${JSON.stringify(response.data).substring(0, 500)}`);
+    console.log(`✅ WASenderAPI: HTTP ${response.status}`);
     return response.data;
   } catch (axiosError) {
-    console.error(`❌ WASenderAPI FALHOU:`);
-    console.error(`  Status: ${axiosError.response?.status || 'sem response'}`);
+    console.error(`❌ WASenderAPI FALHOU: ${axiosError.response?.status || 'sem response'}`);
     console.error(`  Body: ${JSON.stringify(axiosError.response?.data || axiosError.message)}`);
     throw axiosError;
   }
 }
 
-app.get('/', (req, res) => {
-  res.send('✅ SOFIA IA - Bot Quality + OpenAI está ONLINE!');
-});
+// ── Rate limiter ──
+const rateLimits = {};
+function checkRateLimit(phone) {
+  const now = Date.now();
+  if (!rateLimits[phone]) rateLimits[phone] = [];
+  rateLimits[phone] = rateLimits[phone].filter(t => now - t < 60000);
+  if (rateLimits[phone].length >= 10) return false;
+  rateLimits[phone].push(now);
+  return true;
+}
+
+// ── Rotas ──
+app.get('/', (req, res) => res.send('✅ SOFIA IA - Quality Hair está ONLINE!'));
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime() });
+  res.json({
+    status: 'ok',
+    uptime: process.uptime(),
+    modules: {
+      ai: !!getSofiaResponse,
+      inputSanitizer: !!inputSanitizer,
+      topicBlacklist: !!topicBlacklist,
+      conversationManager: !!conversationManager,
+      clientMemory: !!clientMemory,
+      knowledgeBase: !!knowledgeBase,
+    }
+  });
 });
 
 app.get('/dashboard', (req, res) => {
-  const html = `<!doctype html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8" />
-  <title>Sofia IA Dashboard</title>
-  <style>
-    body { font-family: Arial, sans-serif; background: #f4f4f9; color: #222; padding: 24px; }
-    .card { background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,.08); max-width: 720px; margin: 0 auto; }
-    h1 { margin-top: 0; }
-    p { line-height: 1.6; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>Dashboard Sofia IA</h1>
-    <p>Servidor online e pronto para receber webhooks.</p>
-    <ul>
-      <li>Status: <strong>Online</strong></li>
-      <li>Webhook: <strong>/webhook</strong></li>
-      <li>Health: <strong>/health</strong></li>
-    </ul>
-  </div>
-</body>
-</html>`;
-
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(html);
+  res.send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"/><title>Sofia IA</title>
+<style>body{font-family:Arial,sans-serif;background:#f4f4f9;color:#222;padding:24px}
+.card{background:#fff;border-radius:12px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.08);max-width:720px;margin:0 auto}
+h1{margin-top:0} .ok{color:green} .fail{color:red}</style></head><body><div class="card">
+<h1>Dashboard Sofia IA</h1>
+<p>Servidor online.</p>
+<ul>
+<li>AI: <strong class="${getSofiaResponse ? 'ok' : 'fail'}">${getSofiaResponse ? '✅ Completa' : '❌ Fallback'}</strong></li>
+<li>Sanitizer: <strong class="${inputSanitizer ? 'ok' : 'fail'}">${inputSanitizer ? '✅' : '❌'}</strong></li>
+<li>KB: <strong class="${knowledgeBase ? 'ok' : 'fail'}">${knowledgeBase ? '✅' : '❌'}</strong></li>
+</ul></div></body></html>`);
 });
 
 app.get('/webhook', (req, res) => {
-  console.log('🔍 Verificação GET recebida:', req.query);
-  // WASenderAPI faz um GET simples para verificar se o endpoint existe
-  // Retorna 200 para qualquer GET, opcionalmente ecoando hub.challenge se presente
-  console.log('✅ Webhook verificado com sucesso!');
-  return res.status(200).json({ status: 'ok', webhook: 'active' });
+  res.status(200).json({ status: 'ok', webhook: 'active' });
 });
 
-app.get('/webhook/whatsapp', (req, res) => res.redirect(301, '/webhook'));
-
+// ── POST /webhook — Processamento principal ──
 app.post('/webhook', async (req, res) => {
   const reqId = Date.now().toString(36);
   console.log(`\n${'='.repeat(60)}`);
-  console.log(`📨 [${reqId}] WEBHOOK RECEBIDO - ${new Date().toISOString()}`);
-  console.log(`📨 [${reqId}] Headers:`, JSON.stringify({
-    'content-type': req.header('content-type'),
-    'x-webhook-signature': req.header('x-webhook-signature') ? '***SET***' : 'AUSENTE',
-    'user-agent': req.header('user-agent'),
-  }));
-  console.log(`📨 [${reqId}] Body (800 chars):`, JSON.stringify(req.body).substring(0, 800));
+  console.log(`📨 [${reqId}] WEBHOOK - ${new Date().toISOString()}`);
 
-  // ── STEP 1: Autenticação ──
-  console.log(`\n🔐 [${reqId}] STEP 1: Verificando autenticação...`);
+  // STEP 1: Auth
   if (!authenticateWebhookRequest(req)) {
-    console.error(`🚫 [${reqId}] STEP 1 FALHOU: X-Webhook-Signature inválido`);
+    console.error(`🚫 [${reqId}] Auth FALHOU`);
     return res.status(403).json({ status: 'unauthorized' });
   }
-  console.log(`✅ [${reqId}] STEP 1: Autenticação OK`);
 
-  // Responder 200 imediatamente para o provedor não dar timeout
+  // Responder 200 imediatamente
   res.status(200).json({ status: 'received' });
-  console.log(`📤 [${reqId}] Response 200 enviado ao WASenderAPI`);
 
   try {
-    // ── STEP 2: Verificar tipo de evento ──
+    // STEP 2: Evento
     const event = req.body.event;
-    console.log(`\n📋 [${reqId}] STEP 2: Evento recebido: "${event || 'NENHUM'}"`);
     if (event && event !== 'messages.received') {
-      console.log(`⏭️ [${reqId}] STEP 2: Evento "${event}" ignorado (não é messages.received)`);
+      console.log(`⏭️ [${reqId}] Evento "${event}" ignorado`);
       return;
     }
-    console.log(`✅ [${reqId}] STEP 2: Evento válido`);
 
-    // ── STEP 3: Extrair remetente e texto ──
-    console.log(`\n🔍 [${reqId}] STEP 3: Extraindo remetente e texto...`);
+    // STEP 3: Extrair remetente e texto
     let from = null;
     let texto = null;
 
-    // Formato WASenderAPI real (messages.received)
+    // Formato WASenderAPI (messages.received)
     if (req.body.data?.messages) {
       const msg = req.body.data.messages;
       const key = msg.key || {};
-
-      console.log(`  [${reqId}] Formato: WASenderAPI messages.received`);
-      console.log(`  [${reqId}] key.fromMe: ${key.fromMe}`);
-      console.log(`  [${reqId}] key.cleanedSenderPn: ${key.cleanedSenderPn}`);
-      console.log(`  [${reqId}] key.senderPn: ${key.senderPn}`);
-      console.log(`  [${reqId}] key.remoteJid: ${key.remoteJid}`);
-      console.log(`  [${reqId}] msg.messageBody: ${msg.messageBody ? '"' + msg.messageBody.substring(0, 100) + '"' : 'AUSENTE'}`);
-      console.log(`  [${reqId}] msg.message?.conversation: ${msg.message?.conversation ? '"' + msg.message.conversation.substring(0, 100) + '"' : 'AUSENTE'}`);
-
       from = key.cleanedSenderPn || key.senderPn || key.remoteJid;
       texto = msg.messageBody || msg.message?.conversation || msg.message?.extendedTextMessage?.text;
-
       if (key.fromMe === true) {
-        console.log(`🔄 [${reqId}] STEP 3: Mensagem própria (fromMe=true), ignorando`);
+        console.log(`🔄 [${reqId}] fromMe, ignorando`);
         return;
       }
     }
 
-    // Formato alternativo: { data: { from, message } }
+    // Formato alternativo
     if (!from && req.body.data) {
       const data = req.body.data;
       from = data.from || data.sender || data.phone || data.number;
       texto = data.message || data.body || data.text || data.messageBody;
-      if (from) console.log(`  [${reqId}] Formato: data.from/message alternativo`);
     }
 
-    // Formato flat: { from, message }
+    // Formato flat
     if (!from && (req.body.from || req.body.sender || req.body.phone)) {
       from = req.body.from || req.body.sender || req.body.phone;
       texto = req.body.message || req.body.body || req.body.text;
-      if (from) console.log(`  [${reqId}] Formato: flat (from/message no root)`);
     }
 
-    // Formato Meta/Cloud API
-    if (!from && req.body.entry) {
-      const msg = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-      if (msg) {
-        from = msg.from;
-        texto = msg.text?.body;
-        console.log(`  [${reqId}] Formato: Meta/Cloud API`);
-      }
-    }
-
-    console.log(`  [${reqId}] from (raw): ${JSON.stringify(from)}`);
-    console.log(`  [${reqId}] texto (raw): ${JSON.stringify(texto ? texto.substring(0, 200) : null)}`);
-
-    if (!from || !texto) {
-      console.warn(`⚠️ [${reqId}] STEP 3 FALHOU: from=${!!from}, texto=${!!texto} — payload sem mensagem válida`);
-      console.warn(`  [${reqId}] Body completo:`, JSON.stringify(req.body).substring(0, 2000));
+    if (!from || !texto?.trim()) {
+      console.warn(`⚠️ [${reqId}] Sem from/texto. Body: ${JSON.stringify(req.body).substring(0, 500)}`);
       return;
     }
 
     texto = texto.trim();
-    if (!texto) {
-      console.warn(`⚠️ [${reqId}] STEP 3 FALHOU: Mensagem vazia após trim`);
-      return;
-    }
 
-    // Limpar número para formato E.164
+    // Limpar número E.164
     from = String(from)
       .replace(/@s\.whatsapp\.net$/, '')
       .replace(/@lid$/, '')
       .replace(/^whatsapp:/, '')
       .replace(/[\s()-]/g, '')
       .trim();
+    if (from && !from.startsWith('+')) from = '+' + from;
 
-    if (from && !from.startsWith('+')) {
-      from = '+' + from;
-    }
+    console.log(`📱 [${reqId}] De: ${from} | Msg: "${texto.substring(0, 80)}"`);
 
-    console.log(`✅ [${reqId}] STEP 3: from="${from}", texto="${texto.substring(0, 80)}"`);
-
-    // ── STEP 4: Chamar OpenAI ──
-    console.log(`\n🧠 [${reqId}] STEP 4: Chamando OpenAI (gpt-4o-mini)...`);
-    const startAI = Date.now();
-    const completion = await createOpenAIResponse(texto);
-    const aiTime = Date.now() - startAI;
-    const respostaIA = completion.choices?.[0]?.message?.content?.trim();
-
-    if (!respostaIA) {
-      console.error(`❌ [${reqId}] STEP 4 FALHOU: Resposta da OpenAI vazia`);
-      console.error(`  [${reqId}] choices:`, JSON.stringify(completion.choices));
+    // Rate limit
+    if (!checkRateLimit(from)) {
+      console.warn(`🚦 [${reqId}] Rate limit para ${from}`);
       return;
     }
 
-    console.log(`✅ [${reqId}] STEP 4: OpenAI respondeu em ${aiTime}ms`);
-    console.log(`  [${reqId}] Resposta: "${respostaIA.substring(0, 200)}"`);
+    // Sanitização
+    let textoLimpo = texto;
+    if (inputSanitizer) {
+      try {
+        const sanitized = inputSanitizer.sanitize(texto);
+        if (sanitized.blocked) {
+          console.warn(`🛡️ [${reqId}] Input bloqueado: ${sanitized.reason}`);
+          await enviarMensagem(from, 'Desculpe, não entendi. Pode reformular?');
+          return;
+        }
+        textoLimpo = sanitized.text || texto;
+      } catch (e) { /* sanitizer não essencial */ }
+    }
 
-    // ── STEP 5: Enviar resposta via WASenderAPI ──
-    console.log(`\n📤 [${reqId}] STEP 5: Enviando resposta via WASenderAPI...`);
-    console.log(`  [${reqId}] URL: ${WASENDERAPI_BASE_URL}/send-message`);
-    console.log(`  [${reqId}] Token: ${WASENDERAPI_TOKEN ? WASENDERAPI_TOKEN.substring(0, 12) + '...' : 'NÃO CONFIGURADO!'}`);
-    console.log(`  [${reqId}] Payload: { to: "${from}", text: "${respostaIA.substring(0, 80)}..." }`);
+    // Topic blacklist
+    if (topicBlacklist) {
+      try {
+        const check = topicBlacklist.check(textoLimpo);
+        if (check.blocked) {
+          console.warn(`🚫 [${reqId}] Tópico bloqueado: ${check.reason}`);
+          await enviarMensagem(from, check.response || 'Nosso foco é saúde capilar. Posso ajudar nessa área?');
+          return;
+        }
+      } catch (e) { /* blacklist não essencial */ }
+    }
 
+    // STEP 4: Gerar resposta
+    console.log(`🧠 [${reqId}] Gerando resposta...`);
+    const startAI = Date.now();
+    let respostaIA;
+
+    if (getSofiaResponse) {
+      try {
+        respostaIA = await getSofiaResponse(from, textoLimpo);
+        console.log(`✅ [${reqId}] ai.js em ${Date.now() - startAI}ms`);
+      } catch (aiErr) {
+        console.error(`❌ [${reqId}] ai.js erro: ${aiErr.message}`);
+        respostaIA = await fallbackResponse(textoLimpo);
+        console.log(`⚠️ [${reqId}] Fallback usado`);
+      }
+    } else {
+      respostaIA = await fallbackResponse(textoLimpo);
+      console.log(`⚠️ [${reqId}] Fallback (ai.js indisponível)`);
+    }
+
+    if (!respostaIA) {
+      console.error(`❌ [${reqId}] Resposta vazia`);
+      return;
+    }
+
+    console.log(`💬 [${reqId}] Resposta: "${respostaIA.substring(0, 150)}"`);
+
+    // Tracking
+    if (kpiTracker) { try { kpiTracker.recordResponse(Date.now() - startAI); } catch (e) {} }
+    if (auditLogger) { try { auditLogger.logMessage(from, textoLimpo, respostaIA); } catch (e) {} }
+    if (intentFlow) { try { intentFlow.recordIntent(from, textoLimpo); } catch (e) {} }
+
+    // STEP 5: Enviar
+    console.log(`📤 [${reqId}] Enviando via WASenderAPI...`);
     const startSend = Date.now();
     await enviarMensagem(from, respostaIA);
-    const sendTime = Date.now() - startSend;
-
-    console.log(`✅ [${reqId}] STEP 5: Mensagem enviada em ${sendTime}ms`);
-    console.log(`🎉 [${reqId}] FLUXO COMPLETO: ${from} → OpenAI (${aiTime}ms) → WASenderAPI (${sendTime}ms)`);
+    console.log(`✅ [${reqId}] Enviado em ${Date.now() - startSend}ms`);
+    console.log(`🎉 [${reqId}] COMPLETO: ${from}`);
     console.log(`${'='.repeat(60)}\n`);
 
   } catch (error) {
-    console.error(`\n❌ [${reqId}] ERRO NO FLUXO:`);
-    console.error(`  [${reqId}] Tipo: ${error.constructor?.name || 'Unknown'}`);
-    console.error(`  [${reqId}] Mensagem: ${error.message}`);
-    if (error.response) {
-      console.error(`  [${reqId}] HTTP Status: ${error.response.status}`);
-      console.error(`  [${reqId}] Response Body: ${JSON.stringify(error.response.data)}`);
-      console.error(`  [${reqId}] Response Headers: ${JSON.stringify(error.response.headers)}`);
-    }
-    if (error.code) {
-      console.error(`  [${reqId}] Error Code: ${error.code}`);
-    }
-    console.error(`  [${reqId}] Stack:`, error.stack?.split('\n').slice(0, 5).join('\n'));
+    console.error(`❌ [${reqId}] ERRO: ${error.message}`);
+    if (error.response) console.error(`  HTTP ${error.response.status}: ${JSON.stringify(error.response.data)}`);
+    console.error(`  Stack: ${error.stack?.split('\n').slice(0, 4).join('\n')}`);
     console.error(`${'='.repeat(60)}\n`);
   }
 });
 
-console.log(`📌 [BOOT] Tentando bind na porta ${PORT}...`);
+// ── Knowledge Base em background (não bloqueia boot) ──
+if (knowledgeBase && typeof knowledgeBase.initialize === 'function') {
+  setTimeout(() => {
+    console.log('📚 Inicializando Knowledge Base (background)...');
+    knowledgeBase.initialize()
+      .then(() => console.log('✅ Knowledge Base pronta'))
+      .catch(e => console.warn('⚠️ KB falhou:', e.message));
+  }, 3000);
+}
+
+// ── Start ──
+console.log(`📌 [BOOT] Bind na porta ${PORT}...`);
 
 const server = app.listen(PORT, () => {
   console.log(`🚀 Sofia IA rodando na porta ${PORT}`);
-  console.log(`🔗 Webhook: POST /webhook`);
-  console.log(`📊 Dashboard: GET /dashboard`);
-  console.log(`🏥 Health: GET /health`);
-  console.log(`📡 WASenderAPI URL: ${WASENDERAPI_BASE_URL}`);
-  console.log(`🔑 WASenderAPI Token: ${WASENDERAPI_TOKEN ? 'SIM (' + WASENDERAPI_TOKEN.substring(0, 8) + '...)' : '⚠️ NÃO CONFIGURADO'}`);
-  console.log(`🔐 Webhook Secret: ${WEBHOOK_SECRET ? 'SIM' : '⚠️ NÃO (aceitando tudo)'}`);
-  console.log(`🧠 OpenAI API Key: ${OPENAI_API_KEY ? 'SIM (' + OPENAI_API_KEY.substring(0, 8) + '...)' : '⚠️ NÃO CONFIGURADO'}`);
-  
-  // Validações de startup
-  if (!OPENAI_API_KEY) console.error('🚨 OPENAI_API_KEY ausente — bot não conseguirá gerar respostas!');
-  if (!WASENDERAPI_TOKEN) console.error('🚨 WASENDERAPI_TOKEN ausente — bot não conseguirá enviar mensagens!');
-  if (!WEBHOOK_SECRET) console.warn('⚠️ WASENDERAPI_WEBHOOK_SECRET ausente — webhook aceita requisições de qualquer origem');
+  console.log(`📡 WASenderAPI: ${WASENDERAPI_BASE_URL}`);
+  console.log(`🔑 Token: ${WASENDERAPI_TOKEN ? 'SIM' : '⚠️ NÃO'}`);
+  console.log(`🔐 Secret: ${WEBHOOK_SECRET ? 'SIM' : '⚠️ NÃO'}`);
+  console.log(`🧠 OpenAI: ${OPENAI_API_KEY ? 'SIM' : '⚠️ NÃO'}`);
+  console.log(`🤖 AI: ${getSofiaResponse ? 'COMPLETO (ai.js)' : 'FALLBACK (gpt-4o-mini)'}`);
+  if (!OPENAI_API_KEY) console.error('🚨 OPENAI_API_KEY ausente!');
+  if (!WASENDERAPI_TOKEN) console.error('🚨 WASENDERAPI_TOKEN ausente!');
 });
 
 server.on('error', (err) => {
-  console.error(`💀 [BOOT] ERRO ao fazer listen na porta ${PORT}:`, err.message);
-  console.error(err.stack);
+  console.error(`💀 ERRO listen porta ${PORT}:`, err.message);
   process.exit(1);
 });
