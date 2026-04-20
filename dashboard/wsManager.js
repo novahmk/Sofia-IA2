@@ -5,7 +5,7 @@
  */
 
 const { WebSocketServer } = require('ws');
-const { verifyToken } = require('./auth');
+const { verifyToken } = require('../auth');
 
 let wss = null;
 const clients = new Set();

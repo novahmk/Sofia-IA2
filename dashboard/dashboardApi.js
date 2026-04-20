@@ -5,18 +5,18 @@
  */
 
 const https = require('https');
-const kpiTracker = require('./kpiTracker');
-const intentFlow = require('./intentFlow');
-const abTesting = require('./abTesting');
-const topicBlacklist = require('./topicBlacklist');
-const swop = require('./swop');
-const selfHealing = require('./selfHealing');
-const inputSanitizer = require('./inputSanitizer');
-const clientMemory = require('./clientMemory');
-const conversationManager = require('./conversationManager');
-const auditLogger = require('./auditLogger');
-const knowledgeBase = require('./knowledgeBase');
-const feegow = require('./feegow');
+const kpiTracker = require('../kpiTracker');
+const intentFlow = require('../intentFlow');
+const abTesting = require('../abTesting');
+const topicBlacklist = require('../topicBlacklist');
+const swop = require('../swop');
+const selfHealing = require('../utils/selfHealing');
+const inputSanitizer = require('../utils/inputSanitizer');
+const clientMemory = require('../clientMemory');
+const conversationManager = require('../core/conversationManager');
+const auditLogger = require('../utils/auditLogger');
+const knowledgeBase = require('../knowledgeBase');
+const feegow = require('../feegow');
 
 // =====================================================
 // CACHE DE HEALTH CHECK (evita spam de requests)

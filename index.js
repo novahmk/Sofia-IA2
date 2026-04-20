@@ -36,22 +36,22 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 const http = require('http');
 const { getSofiaResponse } = require('./ai');
 const { transcribeAudioFromUrl, detectMediaTypeFromMime, createAudioContext } = require('./audioProcessor');
-const conversationManager = require('./conversationManager');
+const conversationManager = require('./core/conversationManager');
 const knowledgeBase = require('./knowledgeBase');
 const swop = require('./swop');
-const selfHealing = require('./selfHealing');
-const inputSanitizer = require('./inputSanitizer');
+const selfHealing = require('./utils/selfHealing');
+const inputSanitizer = require('./utils/inputSanitizer');
 const clientMemory = require('./clientMemory');
 const MessagingClient = require('./messagingClient');
 const kpiTracker = require('./kpiTracker');
 const intentFlow = require('./intentFlow');
 const topicBlacklist = require('./topicBlacklist');
-const auditLogger = require('./auditLogger');
+const auditLogger = require('./utils/auditLogger');
 const abTesting = require('./abTesting');
 const feegow = require('./feegow');
-const { getDashboardData, runHealthChecks } = require('./dashboardApi');
+const { getDashboardData, runHealthChecks } = require('./dashboard/dashboardApi');
 const auth = require('./auth');
-const wsManager = require('./wsManager');
+const wsManager = require('./dashboard/wsManager');
 const fs = require('fs');
 
 // Inicializa o client de mensagens (UAZAPI)

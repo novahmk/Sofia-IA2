@@ -8,7 +8,7 @@ const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
 
-const AUDIT_FILE = path.join(__dirname, 'audit.log');
+const AUDIT_FILE = path.join(__dirname, '..', 'audit.log');
 
 // Tipos de ação
 const ACTIONS = {
@@ -42,7 +42,7 @@ class AuditLogger {
 
         // Tentar conectar ao database
         try {
-            this.db = require('./database');
+            this.db = require('../database');
         } catch (_) {
             // sem SQLite, usa arquivo
         }

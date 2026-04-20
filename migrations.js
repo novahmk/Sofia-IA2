@@ -43,6 +43,14 @@ async function runMigrations() {
                 updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
 
+            -- Lead memory forte para o fluxo comercial
+            CREATE TABLE IF NOT EXISTS leads (
+                lead_id     TEXT PRIMARY KEY,
+                data        JSONB NOT NULL DEFAULT '{}',
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
             -- Agendamentos
             CREATE TABLE IF NOT EXISTS appointments (
                 id          TEXT PRIMARY KEY,
@@ -96,6 +104,7 @@ async function runMigrations() {
             CREATE INDEX IF NOT EXISTS idx_consents_phone      ON consents(phone);
             CREATE INDEX IF NOT EXISTS idx_conversations_phone ON conversations(phone);
             CREATE INDEX IF NOT EXISTS idx_conversations_time  ON conversations(created_at);
+            CREATE INDEX IF NOT EXISTS idx_leads_updated_at    ON leads(updated_at);
         `);
 
         console.log('✅ Índices criados\n');

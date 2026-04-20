@@ -31,7 +31,13 @@ async function _query(text, params = []) {
     }
 }
 
-const KV_TABLES = new Set(['client_memories', 'conversation_states', 'clients_data']);
+const KV_TABLES = new Set(['client_memories', 'conversation_states', 'clients_data', 'leads']);
+const KV_PRIMARY_KEYS = {
+    client_memories: 'phone',
+    conversation_states: 'phone',
+    clients_data: 'phone',
+    leads: 'lead_id',
+};
 
 function _assertKvTable(table) {
     if (!KV_TABLES.has(table)) throw new Error(`Tabela inválida: ${table}`);
@@ -47,6 +53,7 @@ class SofiaDatabase {
             client_memories: {},
             conversation_states: {},
             clients_data: {},
+            leads: {},
         };
         this.appointments = [];
         this.auditLog = [];
@@ -62,10 +69,11 @@ class SofiaDatabase {
         }
 
         try {
-            const [memories, conversationStates, clientsData, appointments, auditLog] = await Promise.all([
+            const [memories, conversationStates, clientsData, leads, appointments, auditLog] = await Promise.all([
                 _query('SELECT phone, data FROM client_memories'),
                 _query('SELECT phone, data FROM conversation_states'),
                 _query('SELECT phone, data FROM clients_data'),
+                _query('SELECT lead_id, data FROM leads'),
                 _query('SELECT * FROM appointments ORDER BY date, time'),
                 _query('SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 1000'),
             ]);
@@ -73,6 +81,7 @@ class SofiaDatabase {
             this._replaceKvCache('client_memories', memories.rows);
             this._replaceKvCache('conversation_states', conversationStates.rows);
             this._replaceKvCache('clients_data', clientsData.rows);
+            this._replaceKvCache('leads', leads.rows);
             this._replaceArray(this.appointments, appointments.rows);
             this._replaceArray(this.auditLog, auditLog.rows);
 
@@ -85,11 +94,12 @@ class SofiaDatabase {
 
     _replaceKvCache(table, rows) {
         const target = this.kvCache[table];
+        const keyColumn = KV_PRIMARY_KEYS[table];
         for (const key of Object.keys(target)) {
             delete target[key];
         }
         for (const row of rows) {
-            target[row.phone] = row.data;
+            target[row[keyColumn]] = row.data;
         }
     }
 
@@ -111,14 +121,15 @@ class SofiaDatabase {
     set(table, phone, data) {
         _assertKvTable(table);
         this.kvCache[table][phone] = data;
+        const keyColumn = KV_PRIMARY_KEYS[table];
 
         if (!pool) return;
 
         this._runInBackground(
             _query(
-                `INSERT INTO ${table} (phone, data, updated_at)
+                `INSERT INTO ${table} (${keyColumn}, data, updated_at)
                  VALUES ($1, $2::jsonb, NOW())
-                 ON CONFLICT (phone) DO UPDATE
+                 ON CONFLICT (${keyColumn}) DO UPDATE
                    SET data = $2::jsonb, updated_at = NOW()`,
                 [phone, _serializeJsonb(data)]
             ),
@@ -134,13 +145,39 @@ class SofiaDatabase {
     delete(table, phone) {
         _assertKvTable(table);
         delete this.kvCache[table][phone];
+        const keyColumn = KV_PRIMARY_KEYS[table];
 
         if (!pool) return;
 
         this._runInBackground(
-            _query(`DELETE FROM ${table} WHERE phone = $1`, [phone]),
+            _query(`DELETE FROM ${table} WHERE ${keyColumn} = $1`, [phone]),
             `db.delete(${table})`
         );
+    }
+
+    async query(text, params = []) {
+        if (pool) {
+            return _query(text, params);
+        }
+
+        const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
+
+        if (normalized === 'select data from leads where lead_id = $1') {
+            const lead = this.kvCache.leads[params[0]];
+            return { rows: lead ? [{ data: lead }] : [], rowCount: lead ? 1 : 0 };
+        }
+
+        if (normalized.startsWith('insert into leads (lead_id, data) values ($1, $2)')) {
+            this.kvCache.leads[params[0]] = params[1];
+            return { rows: [], rowCount: 1 };
+        }
+
+        if (normalized === 'update leads set data = $1 where lead_id = $2') {
+            this.kvCache.leads[params[1]] = params[0];
+            return { rows: [], rowCount: 1 };
+        }
+
+        throw new Error('DATABASE_URL nao configurada para esta query');
     }
 
     getAppointments() {
@@ -240,6 +277,7 @@ class SofiaDatabase {
         delete this.kvCache.client_memories[phone];
         delete this.kvCache.conversation_states[phone];
         delete this.kvCache.clients_data[phone];
+        delete this.kvCache.leads[phone];
 
         for (let index = this.appointments.length - 1; index >= 0; index -= 1) {
             if (this.appointments[index].phone === phone) {
@@ -262,6 +300,7 @@ class SofiaDatabase {
                     await client.query('DELETE FROM appointments WHERE phone = $1', [phone]);
                     await client.query('DELETE FROM consents WHERE phone = $1', [phone]);
                     await client.query('DELETE FROM conversations WHERE phone = $1', [phone]);
+                    await client.query('DELETE FROM leads WHERE lead_id = $1', [phone]);
                     await client.query('COMMIT');
                 } catch (err) {
                     await client.query('ROLLBACK');
@@ -278,6 +317,7 @@ class SofiaDatabase {
         return {
             clients: Object.keys(this.kvCache.client_memories).length,
             conversations: Object.keys(this.kvCache.conversation_states).length,
+            leads: Object.keys(this.kvCache.leads).length,
             appointments: this.appointments.length,
             auditEntries: this.auditLog.length,
             provider: pool ? 'postgresql' : 'memory',

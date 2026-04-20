@@ -9,8 +9,8 @@ const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
 
-const db = require('./database');
-const CONVERSATION_STATE_FILE = path.join(__dirname, 'conversation_states.json');
+const db = require('../database');
+const CONVERSATION_STATE_FILE = path.join(__dirname, '..', 'conversation_states.json');
 
 class ConversationManager {
     constructor() {

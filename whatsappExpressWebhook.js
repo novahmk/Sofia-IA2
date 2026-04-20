@@ -26,6 +26,7 @@ let kpiTracker = null;
 let auditLogger = null;
 let knowledgeBase = null;
 let intentFlow = null;
+const commercialFlow = require('./leadSystem/commercialFlow');
 
 try {
   const ai = require('./ai');
@@ -35,12 +36,12 @@ try {
   console.warn('⚠️ [BOOT] ai.js falhou:', e.message);
 }
 
-try { inputSanitizer = require('./inputSanitizer'); console.log('📌 [BOOT] inputSanitizer OK'); } catch (e) { console.warn('⚠️ [BOOT] inputSanitizer falhou:', e.message); }
+try { inputSanitizer = require('./utils/inputSanitizer'); console.log('📌 [BOOT] inputSanitizer OK'); } catch (e) { console.warn('⚠️ [BOOT] inputSanitizer falhou:', e.message); }
 try { topicBlacklist = require('./topicBlacklist'); console.log('📌 [BOOT] topicBlacklist OK'); } catch (e) { console.warn('⚠️ [BOOT] topicBlacklist falhou:', e.message); }
-try { conversationManager = require('./conversationManager'); console.log('📌 [BOOT] conversationManager OK'); } catch (e) { console.warn('⚠️ [BOOT] conversationManager falhou:', e.message); }
+try { conversationManager = require('./core/conversationManager'); console.log('📌 [BOOT] conversationManager OK'); } catch (e) { console.warn('⚠️ [BOOT] conversationManager falhou:', e.message); }
 try { clientMemory = require('./clientMemory'); console.log('📌 [BOOT] clientMemory OK'); } catch (e) { console.warn('⚠️ [BOOT] clientMemory falhou:', e.message); }
 try { kpiTracker = require('./kpiTracker'); console.log('📌 [BOOT] kpiTracker OK'); } catch (e) { console.warn('⚠️ [BOOT] kpiTracker falhou:', e.message); }
-try { auditLogger = require('./auditLogger'); console.log('📌 [BOOT] auditLogger OK'); } catch (e) { console.warn('⚠️ [BOOT] auditLogger falhou:', e.message); }
+try { auditLogger = require('./utils/auditLogger'); console.log('📌 [BOOT] auditLogger OK'); } catch (e) { console.warn('⚠️ [BOOT] auditLogger falhou:', e.message); }
 try { knowledgeBase = require('./knowledgeBase'); console.log('📌 [BOOT] knowledgeBase OK'); } catch (e) { console.warn('⚠️ [BOOT] knowledgeBase falhou:', e.message); }
 try { intentFlow = require('./intentFlow'); console.log('📌 [BOOT] intentFlow OK'); } catch (e) { console.warn('⚠️ [BOOT] intentFlow falhou:', e.message); }
 
@@ -179,6 +180,7 @@ app.post('/webhook', async (req, res) => {
     // STEP 3: Extrair remetente e texto
     let from = null;
     let texto = null;
+    let pushName = 'Cliente';
 
     // Formato WASenderAPI (messages.received)
     if (req.body.data?.messages) {
@@ -186,6 +188,7 @@ app.post('/webhook', async (req, res) => {
       const key = msg.key || {};
       from = key.cleanedSenderPn || key.senderPn || key.remoteJid;
       texto = msg.messageBody || msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+      pushName = msg.pushName || req.body.data.pushName || pushName;
       if (key.fromMe === true) {
         console.log(`🔄 [${reqId}] fromMe, ignorando`);
         return;
@@ -197,12 +200,14 @@ app.post('/webhook', async (req, res) => {
       const data = req.body.data;
       from = data.from || data.sender || data.phone || data.number;
       texto = data.message || data.body || data.text || data.messageBody;
+      pushName = data.pushName || pushName;
     }
 
     // Formato flat
     if (!from && (req.body.from || req.body.sender || req.body.phone)) {
       from = req.body.from || req.body.sender || req.body.phone;
       texto = req.body.message || req.body.body || req.body.text;
+      pushName = req.body.pushName || pushName;
     }
 
     if (!from || !texto?.trim()) {
@@ -233,13 +238,11 @@ app.post('/webhook', async (req, res) => {
     let textoLimpo = texto;
     if (inputSanitizer) {
       try {
-        const sanitized = inputSanitizer.sanitize(texto);
-        if (sanitized.blocked) {
-          console.warn(`🛡️ [${reqId}] Input bloqueado: ${sanitized.reason}`);
-          await enviarMensagem(from, 'Desculpe, não entendi. Pode reformular?');
-          return;
+        const sanitized = inputSanitizer.sanitize(texto, from);
+        textoLimpo = sanitized.sanitized || texto;
+        if (sanitized.flags?.length && auditLogger) {
+          auditLogger.inputSanitized(from, sanitized.flags);
         }
-        textoLimpo = sanitized.text || texto;
       } catch (e) { /* sanitizer não essencial */ }
     }
 
@@ -258,21 +261,13 @@ app.post('/webhook', async (req, res) => {
     // STEP 4: Gerar resposta
     console.log(`🧠 [${reqId}] Gerando resposta...`);
     const startAI = Date.now();
-    let respostaIA;
-
-    if (getSofiaResponse) {
-      try {
-        respostaIA = await getSofiaResponse(from, textoLimpo);
-        console.log(`✅ [${reqId}] ai.js em ${Date.now() - startAI}ms`);
-      } catch (aiErr) {
-        console.error(`❌ [${reqId}] ai.js erro: ${aiErr.message}`);
-        respostaIA = await fallbackResponse(textoLimpo);
-        console.log(`⚠️ [${reqId}] Fallback usado`);
-      }
-    } else {
-      respostaIA = await fallbackResponse(textoLimpo);
-      console.log(`⚠️ [${reqId}] Fallback (ai.js indisponível)`);
-    }
+    const result = await commercialFlow.processMessage(
+      from,
+      textoLimpo,
+      pushName || 'Cliente'
+    );
+    const respostaIA = result.response;
+    console.log(`✅ [${reqId}] commercialFlow em ${Date.now() - startAI}ms`);
 
     if (!respostaIA) {
       console.error(`❌ [${reqId}] Resposta vazia`);
@@ -283,7 +278,12 @@ app.post('/webhook', async (req, res) => {
 
     // Tracking
     if (kpiTracker) { try { kpiTracker.recordResponse(Date.now() - startAI); } catch (e) {} }
-    if (auditLogger) { try { auditLogger.logMessage(from, textoLimpo, respostaIA); } catch (e) {} }
+    if (auditLogger) {
+      try {
+        auditLogger.msgReceived(from, textoLimpo);
+        auditLogger.msgSent(from, respostaIA);
+      } catch (e) {}
+    }
     if (intentFlow) { try { intentFlow.recordIntent(from, textoLimpo); } catch (e) {} }
 
     // STEP 5: Enviar

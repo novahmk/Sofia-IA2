@@ -8,7 +8,7 @@ const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
 
-const HEALING_LOG_FILE = path.join(__dirname, 'healing_log.json');
+const HEALING_LOG_FILE = path.join(__dirname, '..', 'healing_log.json');
 
 class SelfHealing {
     constructor() {

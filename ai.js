@@ -4,7 +4,7 @@ const swop = require('./swop');
 const knowledgeBase = require('./knowledgeBase');
 const functionCalling = require('./functionCalling');
 const clientMemory = require('./clientMemory');
-const selfHealing = require('./selfHealing');
+const selfHealing = require('./utils/selfHealing');
 const abTesting = require('./abTesting');
 
 const openai = new OpenAI({
