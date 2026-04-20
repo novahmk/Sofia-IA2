@@ -27,12 +27,11 @@ const VALID_ROLES = ['admin', 'atendente', 'visualizador'];
 
 // PostgreSQL pool (reutiliza DATABASE_URL do Railway)
 const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
+// Railway usa certificado SSL interno — rejectUnauthorized deve ser false
 const pool = hasDatabaseUrl
     ? new Pool({
         connectionString: process.env.DATABASE_URL,
-        ssl: process.env.NODE_ENV === 'production'
-            ? { rejectUnauthorized: true }
-            : { rejectUnauthorized: false },
+        ssl: { rejectUnauthorized: false },
         max: 3,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 5000,
