@@ -6,6 +6,7 @@ const functionCalling = require('./functionCalling');
 const clientMemory = require('./clientMemory');
 const selfHealing = require('./utils/selfHealing');
 const abTesting = require('./abTesting');
+const db = require('./database');
 
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
@@ -289,6 +290,19 @@ async function getSofiaResponse(userId, userMessage, audioContext = null) {
         chatHistories[userId] = [
             { role: "system", content: effectivePrompt }
         ];
+
+        // Bug 2 — Hidratação: restaura histórico do banco após restart no Railway
+        try {
+            const leadMem = require('./leadSystem/leadMemory');
+            const leadData = await leadMem.getOrCreateLead(userId);
+            const hist = (leadData.contexto_conversa || []).slice(-10);
+            if (hist.length > 0) {
+                chatHistories[userId].push(...hist.map(m => ({ role: m.role, content: m.content })));
+                console.log(`💾 Histórico restaurado do banco para ${userId}: ${hist.length} msgs`);
+            }
+        } catch (e) {
+            console.warn(`⚠️ Hidratação falhou para ${userId}: ${e.message}`);
+        }
     }
 
     // ===== MEMÓRIA DO CLIENTE (compacta) =====
@@ -497,6 +511,10 @@ async function getSofiaResponse(userId, userMessage, audioContext = null) {
 
         // ===== ANTI-REPETIÇÃO: Registrar resposta =====
         trackResponse(userId, sofiaMessage);
+
+        // Bug 2 — Persistência: salva cada mensagem no banco em background
+        db.insertConversationMessage(userId, 'user', userMessage);
+        db.insertConversationMessage(userId, 'assistant', sofiaMessage);
 
         // ===== ATUALIZAR MEMÓRIA DO CLIENTE =====
         console.log(`📝 Atualizando memória do cliente...`);

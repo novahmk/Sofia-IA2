@@ -28,6 +28,7 @@ let knowledgeBase = null;
 let intentFlow = null;
 const commercialFlow = require('./leadSystem/commercialFlow');
 const leadMemory = require('./leadSystem/leadMemory');
+const followUpManager = require('./leadSystem/followUpManager');
 
 try {
   const ai = require('./ai');
@@ -330,3 +331,9 @@ if (knowledgeBase && typeof knowledgeBase.initialize === 'function') {
       .catch(e => console.warn('⚠️ KB falhou:', e.message));
   }, 3000);
 }
+
+// ── Follow-up Cron (5s após o servidor subir) ──
+setTimeout(() => {
+  console.log('⏰ Iniciando cron de follow-up...');
+  followUpManager.startCron(enviarMensagem);
+}, 5000);
