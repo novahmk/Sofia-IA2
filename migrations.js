@@ -120,3 +120,5 @@ runMigrations().catch(err => {
     console.error('❌ Erro nas migrations:', err.message);
     process.exit(1);
 });
+
+module.exports = { runMigrations };

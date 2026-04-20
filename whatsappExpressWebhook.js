@@ -49,6 +49,13 @@ try { intentFlow = require('./intentFlow'); console.log('📌 [BOOT] intentFlow 
 
 console.log('📌 [BOOT] Imports concluídos');
 
+// ── Auto-migrations: cria tabelas no PostgreSQL automaticamente no boot ──
+if (process.env.DATABASE_URL) {
+  require('./migrations').runMigrations()
+    .then(() => console.log('🗄️  Migrations concluídas'))
+    .catch(e => console.warn('⚠️ Migrations falhou (não crítico):', e.message));
+}
+
 // ── Configuração ──
 const app = express();
 const PORT = process.env.PORT || 8080;
