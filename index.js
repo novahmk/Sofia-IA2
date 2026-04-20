@@ -74,6 +74,19 @@ const rateLimits = {};
 const RATE_LIMIT_WINDOW_MS = 60000; // 1 minuto
 const RATE_LIMIT_MAX_MESSAGES = 10; // máximo de mensagens por janela
 
+// Rate limiting por IP (P1 — evita bypass via múltiplos telefones)
+const ipRateLimits = {};
+const IP_RATE_LIMIT_MAX = 100; // máximo de requests por IP/min
+
+function checkIpRateLimit(ip) {
+    const now = Date.now();
+    if (!ipRateLimits[ip]) ipRateLimits[ip] = [];
+    ipRateLimits[ip] = ipRateLimits[ip].filter(t => now - t < RATE_LIMIT_WINDOW_MS);
+    if (ipRateLimits[ip].length >= IP_RATE_LIMIT_MAX) return false;
+    ipRateLimits[ip].push(now);
+    return true;
+}
+
 // Limpa usuários inativos a cada 1 hora
 setInterval(() => {
     const now = Date.now();
@@ -404,6 +417,14 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // Rate limiting por IP (aplicado a todas as rotas exceto OPTIONS)
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+    if (!checkIpRateLimit(clientIp)) {
+        res.writeHead(429, CORS);
+        res.end(JSON.stringify({ error: 'Too Many Requests' }));
+        return;
+    }
+
     // Helper: parse JSON body
     function readBody() {
         return new Promise((resolve, reject) => {
@@ -488,6 +509,13 @@ const server = http.createServer(async (req, res) => {
         // ===== WEBHOOK INBOUND MESSAGES (chat provider) =====
 
         if (req.method === 'POST' && (req.url === '/webhook' || req.url === '/api/messages')) {
+            // P2: Validação de Content-Type
+            const ct = req.headers['content-type'] || '';
+            if (!ct.includes('application/json')) {
+                res.writeHead(415, CORS);
+                res.end(JSON.stringify({ error: 'Content-Type deve ser application/json' }));
+                return;
+            }
             let body = '';
             req.on('data', chunk => { body += chunk; });
             req.on('end', () => {
@@ -569,7 +597,7 @@ const server = http.createServer(async (req, res) => {
                     processIncomingMessage(webhookData);
 
                 } catch (parseError) {
-                    console.error('❌ Erro ao parsear webhook:', parseError.message);
+                    console.error('❌ Erro ao parsear webhook body');
                 }
             });
             return;
@@ -581,7 +609,7 @@ const server = http.createServer(async (req, res) => {
         if (!user) return; // 401 already sent
 
         // Check role permission for the route
-        if (!auth.hasPermission(user.role, req.url)) {
+        if (!auth.hasPermission(user.role, req.url, req.method)) {
             return json(403, { error: 'Sem permissão para acessar este recurso' });
         }
 
@@ -1092,6 +1120,19 @@ setInterval(() => {
     try { kpiTracker.printReport(); } catch(e) {}
     try { abTesting.printReport(); } catch(e) {}
 }, 5 * 60 * 1000);
+
+// P3: Monitoramento de memória a cada 1 minuto
+const { chatHistories } = (() => { try { return require('./ai'); } catch(e) { return {}; } })();
+setInterval(() => {
+    const mem = process.memoryUsage();
+    const heapUsedMB = Math.round(mem.heapUsed / 1024 / 1024);
+    const heapTotalMB = Math.round(mem.heapTotal / 1024 / 1024);
+    const activeUsers = chatHistories ? Object.keys(chatHistories).length : 0;
+    console.log(`📊 Mem: ${heapUsedMB}MB/${heapTotalMB}MB | Usuários: ${activeUsers} | Uptime: ${Math.round(process.uptime() / 60)}min`);
+    if (heapUsedMB > 400) {
+        console.warn(`⚠️ Uso de memória alto: ${heapUsedMB}MB`);
+    }
+}, 60000);
 
 // Graceful shutdown
 process.on('SIGINT', async () => {

@@ -12,7 +12,14 @@ const path = require('path');
 const { Pool } = require('pg');
 
 const USERS_FILE = path.join(__dirname, 'dashboard_users.json');
-const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+
+// JWT_SECRET DEVE ser definido em .env — nunca gerado dinamicamente (tokens seriam invalidados a cada restart)
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    console.error('❌ CRÍTICO: JWT_SECRET não configurado. Defina em .env ou nas variáveis do Railway.');
+    // Em produção sobe mesmo sem JWT_SECRET (dashboard ficará indisponível), mas não derruba o bot
+    // process.exit(1) seria adequado se o dashboard for obrigatório
+}
 const JWT_EXPIRY = '8h';
 
 // Roles: admin (tudo), atendente (sem segurança/AB), visualizador (somente leitura)
@@ -23,7 +30,9 @@ const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 const pool = hasDatabaseUrl
     ? new Pool({
         connectionString: process.env.DATABASE_URL,
-        ssl: { rejectUnauthorized: false },
+        ssl: process.env.NODE_ENV === 'production'
+            ? { rejectUnauthorized: true }
+            : { rejectUnauthorized: false },
         max: 3,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 5000,
@@ -198,10 +207,19 @@ function authenticate(req, res) {
     return payload;
 }
 
+// Rotas POST/DELETE que o visualizador nunca deve acessar
+const VISUALIZADOR_BLOCKED_PATHS = [
+    '/api/dashboard/handoff',
+    '/api/dashboard/lgpd',
+    '/api/dashboard/kb',
+    '/api/dashboard/security',
+    '/api/auth/signup',
+];
+
 /**
- * Verifica se o role do usuário tem permissão para a rota.
+ * Verifica se o role do usuário tem permissão para a rota + método HTTP.
  */
-function hasPermission(role, route) {
+function hasPermission(role, route, method = 'GET') {
     if (role === 'admin') return true;
     if (role === 'atendente') {
         // Atendente não acessa segurança e AB test
@@ -209,8 +227,11 @@ function hasPermission(role, route) {
         return true;
     }
     if (role === 'visualizador') {
-        // Visualizador não pode fazer POST (handoff, kb add, lgpd actions)
-        return true; // read-only checked at POST level
+        // Visualizador é estritamente read-only: bloqueia todos os POST/DELETE/PUT/PATCH
+        if (['POST', 'DELETE', 'PUT', 'PATCH'].includes(method)) return false;
+        // Bloqueia rotas sensíveis mesmo em GET
+        if (VISUALIZADOR_BLOCKED_PATHS.some(p => route.startsWith(p))) return false;
+        return true;
     }
     return false;
 }

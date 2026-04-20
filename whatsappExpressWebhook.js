@@ -122,7 +122,7 @@ async function enviarMensagem(to, text) {
   }
 }
 
-// ── Rate limiter ──
+// ── Rate limiter por telefone ──
 const rateLimits = {};
 function checkRateLimit(phone) {
   const now = Date.now();
@@ -130,6 +130,17 @@ function checkRateLimit(phone) {
   rateLimits[phone] = rateLimits[phone].filter(t => now - t < 60000);
   if (rateLimits[phone].length >= 10) return false;
   rateLimits[phone].push(now);
+  return true;
+}
+
+// ── Rate limiter por IP ──
+const ipRateLimits = {};
+function checkIpRateLimit(ip) {
+  const now = Date.now();
+  if (!ipRateLimits[ip]) ipRateLimits[ip] = [];
+  ipRateLimits[ip] = ipRateLimits[ip].filter(t => now - t < 60000);
+  if (ipRateLimits[ip].length >= 100) return false;
+  ipRateLimits[ip].push(now);
   return true;
 }
 
@@ -161,6 +172,19 @@ app.post('/webhook', async (req, res) => {
   const reqId = Date.now().toString(36);
   console.log(`\n${'='.repeat(60)}`);
   console.log(`📨 [${reqId}] WEBHOOK - ${new Date().toISOString()}`);
+
+  // P2: Validação de Content-Type
+  const ct = req.headers['content-type'] || '';
+  if (!ct.includes('application/json')) {
+    return res.status(415).json({ error: 'Content-Type deve ser application/json' });
+  }
+
+  // P1: Rate limit por IP
+  const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+  if (!checkIpRateLimit(clientIp)) {
+    console.warn(`🚫 [${reqId}] IP rate limit: ${clientIp}`);
+    return res.status(429).json({ error: 'Too Many Requests' });
+  }
 
   // STEP 1: Auth
   if (!authenticateWebhookRequest(req)) {
