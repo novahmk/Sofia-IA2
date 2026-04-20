@@ -430,7 +430,7 @@ const server = http.createServer(async (req, res) => {
 
         // Servir o dashboard HTML
         if (req.method === 'GET' && (req.url === '/dashboard' || req.url === '/dashboard/')) {
-            const dashPath = path.join(__dirname, 'dashboard.html');
+            const dashPath = path.join(__dirname, 'dashboard', 'dashboard.html');
             try {
                 const html = fs.readFileSync(dashPath, 'utf-8');
                 res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });

@@ -27,6 +27,7 @@ let auditLogger = null;
 let knowledgeBase = null;
 let intentFlow = null;
 const commercialFlow = require('./leadSystem/commercialFlow');
+const leadMemory = require('./leadSystem/leadMemory');
 
 try {
   const ai = require('./ai');

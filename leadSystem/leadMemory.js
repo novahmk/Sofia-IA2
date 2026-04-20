@@ -2,7 +2,7 @@ const db = require('../database');
 const LeadState = require('./leadState');
 
 class LeadMemory {
-  async getOrCreateLead(phone, name = 'Cliente') {
+  async getOrCreateLead(phone, name = "Cliente") {
     const result = await db.query(
       'SELECT data FROM leads WHERE lead_id = $1',
       [phone]
@@ -27,7 +27,7 @@ class LeadMemory {
     const updatedLead = {
       ...lead,
       ...updates,
-      ultima_interacao: new Date().toISOString(),
+      ultima_interacao: new Date().toISOString()
     };
 
     await db.query(
@@ -43,19 +43,17 @@ class LeadMemory {
     lead.contexto_conversa = lead.contexto_conversa || [];
 
     lead.contexto_conversa.push({
-      role: isUser ? 'user' : 'assistant',
-      content: message.substring(0, 500),
-      timestamp: new Date().toISOString(),
+      role: isUser ? "user" : "assistant",
+      content: message.substring(0, 500), // limita tamanho
+      timestamp: new Date().toISOString()
     });
 
+    // Mantém só as últimas 12 mensagens
     if (lead.contexto_conversa.length > 12) {
       lead.contexto_conversa.shift();
     }
 
-    await this.updateLead(phone, {
-      contexto_conversa: lead.contexto_conversa,
-      ultimo_mensagem: message.substring(0, 500),
-    });
+    await this.updateLead(phone, { contexto_conversa: lead.contexto_conversa });
   }
 }
 
