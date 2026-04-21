@@ -109,6 +109,30 @@ async function saveClientContext(phone, updates) {
   return memory;
 }
 
+function getActiveScheduling(memory, pendingScheduling) {
+  if (pendingScheduling?.eventId) {
+    return pendingScheduling;
+  }
+
+  if (memory?.activeScheduling?.eventId) {
+    return memory.activeScheduling;
+  }
+
+  const scheduled = memory?.appointments?.scheduled || [];
+  for (let index = scheduled.length - 1; index >= 0; index -= 1) {
+    const appointment = scheduled[index];
+    if (appointment?.eventId && appointment.status !== 'cancelled') {
+      return {
+        eventId: appointment.eventId,
+        selectedDateTime: appointment.dateTime,
+        step: 'confirmed',
+      };
+    }
+  }
+
+  return null;
+}
+
 class SchedulingIntentionAnalyzer {
   static analyzeMessage(message) {
     const msg = normalizeMessage(message);
@@ -466,6 +490,34 @@ class SchedulingManagerClass {
     }
 
     if (pendingScheduling.step === 'waiting_slot_selection' && pendingScheduling.availableSlots) {
+      if (extraction.suggestedDate || extraction.suggestedTime) {
+        const matchingPendingSlots = pendingScheduling.availableSlots.filter((slot) => {
+          const slotDate = new Date(slot.start);
+          let matches = true;
+
+          if (extraction.suggestedDate) {
+            matches = matches && slotDate.toISOString().split('T')[0] === extraction.suggestedDate;
+          }
+
+          if (extraction.suggestedTime) {
+            const [hour, minute] = extraction.suggestedTime.split(':').map(Number);
+            matches = matches && slotDate.getHours() === hour && slotDate.getMinutes() === minute;
+          }
+
+          return matches;
+        });
+
+        if (matchingPendingSlots.length > 0) {
+          return this.confirmAndCreateEvent(phone, name, matchingPendingSlots[0]);
+        }
+
+        return {
+          success: false,
+          message: `Não encontrei esse horário exato livre, mas tenho estas opções para você:\n\n${MESSAGE_TEMPLATES.showAvailable(pendingScheduling.availableSlots)}`,
+          availableSlots: pendingScheduling.availableSlots,
+        };
+      }
+
       const slotIndex = NaturalSlotParser.parse(message, pendingScheduling.availableSlots);
       if (slotIndex === null) {
         return {
@@ -525,7 +577,21 @@ class SchedulingManagerClass {
       agendado: true,
     });
 
-    await saveClientContext(phone, { pendingScheduling: null });
+    const memory = clientMemory.getClientMemory(phone);
+    const appointment = (memory.appointments?.scheduled || []).find((item) => item.eventId === pendingScheduling.eventId);
+    if (appointment) {
+      appointment.status = 'confirmed';
+      appointment.confirmed_at = new Date().toISOString();
+    }
+
+    await saveClientContext(phone, {
+      pendingScheduling: null,
+      activeScheduling: {
+        eventId: pendingScheduling.eventId,
+        selectedDateTime: pendingScheduling.selectedDateTime,
+        step: 'confirmed',
+      },
+    });
 
     return {
       success: true,
@@ -538,14 +604,17 @@ class SchedulingManagerClass {
   }
 
   async handleCancellation(phone, name, pendingScheduling) {
-    if (!pendingScheduling.eventId) {
+    const memory = clientMemory.getClientMemory(phone);
+    const scheduling = getActiveScheduling(memory, pendingScheduling);
+
+    if (!scheduling?.eventId) {
       return {
         success: false,
         message: 'Você não tem nenhum agendamento para cancelar.',
       };
     }
 
-    const cancelled = await calendar.cancelEvent(pendingScheduling.eventId);
+    const cancelled = await calendar.cancelEvent(scheduling.eventId);
     if (!cancelled) {
       return {
         success: false,
@@ -558,13 +627,20 @@ class SchedulingManagerClass {
       data_cancelamento: new Date().toISOString(),
     });
 
-    const memory = clientMemory.getClientMemory(phone);
     memory.appointments.cancelled.push({
-      eventId: pendingScheduling.eventId,
+      eventId: scheduling.eventId,
       cancelled_at: new Date().toISOString(),
-      previousDateTime: pendingScheduling.selectedDateTime,
+      previousDateTime: scheduling.selectedDateTime,
     });
-    await saveClientContext(phone, { pendingScheduling: null });
+
+    const scheduled = memory.appointments?.scheduled || [];
+    const appointment = scheduled.find((item) => item.eventId === scheduling.eventId);
+    if (appointment) {
+      appointment.status = 'cancelled';
+      appointment.cancelled_at = new Date().toISOString();
+    }
+
+    await saveClientContext(phone, { pendingScheduling: null, activeScheduling: null });
 
     return {
       success: true,
@@ -574,12 +650,36 @@ class SchedulingManagerClass {
   }
 
   async handleRescheduling(phone, name, pendingScheduling) {
-    if (pendingScheduling.eventId) {
-      await calendar.cancelEvent(pendingScheduling.eventId);
+    const memory = clientMemory.getClientMemory(phone);
+    const scheduling = getActiveScheduling(memory, pendingScheduling);
+
+    if (!scheduling?.eventId) {
+      return {
+        success: false,
+        message: 'Você não tem nenhum agendamento para remarcar.',
+      };
+    }
+
+    await calendar.cancelEvent(scheduling.eventId);
+
+    memory.appointments.cancelled.push({
+      eventId: scheduling.eventId,
+      cancelled_at: new Date().toISOString(),
+      previousDateTime: scheduling.selectedDateTime,
+      reason: 'rescheduled',
+    });
+
+    const scheduled = memory.appointments?.scheduled || [];
+    const appointment = scheduled.find((item) => item.eventId === scheduling.eventId);
+    if (appointment) {
+      appointment.status = 'cancelled';
+      appointment.cancelled_at = new Date().toISOString();
+      appointment.reason = 'rescheduled';
     }
 
     const availableSlots = await BusinessHoursManager.getAvailableSlots();
     await saveClientContext(phone, {
+      activeScheduling: null,
       pendingScheduling: {
         step: 'waiting_slot_selection',
         lastRequestTime: new Date().toISOString(),

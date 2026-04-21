@@ -52,6 +52,16 @@ const INTENT_MAP = [
   },
   // Administrativas
   {
+    keywords: ['cancelar', 'cancelo', 'cancelamento', 'não vou', 'nao vou', 'desisto'],
+    type: 'schedule_cancellation',
+    agent: 'administrative',
+  },
+  {
+    keywords: ['remarcar', 'reagendar', 'desmarcar', 'mudar horário', 'mudar horario', 'adiar'],
+    type: 'reschedule',
+    agent: 'administrative',
+  },
+  {
     keywords: [
       'agendar', 'marcar', 'horário', 'disponível', 'agenda', 'consulta', 'avaliação',
       'quero ir', 'ir à clínica', 'visitar',
@@ -62,16 +72,6 @@ const INTENT_MAP = [
   {
     keywords: ['confirmo', 'confirmado', 'aceito', 'pode ser', 'combinado', 'fechado'],
     type: 'schedule_confirmation',
-    agent: 'administrative',
-  },
-  {
-    keywords: ['cancelar', 'remarcar', 'desmarcar', 'mudar horário', 'adiar'],
-    type: 'reschedule',
-    agent: 'administrative',
-  },
-  {
-    keywords: ['não vou', 'desisto', 'cancelo', 'cancelamento'],
-    type: 'schedule_cancellation',
     agent: 'administrative',
   },
   {
