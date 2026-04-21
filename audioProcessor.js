@@ -4,7 +4,11 @@ const https = require('https');
 const http = require('http');
 const { OpenAI } = require('openai');
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+let _openai = null;
+function getOpenAI() {
+    if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    return _openai;
+}
 
 async function transcribeAudio(message, preDownloadedMedia = null, outputDir = './temp_audio') {
     if (!fs.existsSync(outputDir)) {
@@ -24,7 +28,7 @@ async function transcribeAudio(message, preDownloadedMedia = null, outputDir = '
     try {
         const start = Date.now();
 
-        const transcription = await openai.audio.transcriptions.create({
+        const transcription = await getOpenAI().audio.transcriptions.create({
             file: fs.createReadStream(audioPath),
             model: 'whisper-1',
             response_format: 'verbose_json', // retorna idioma detectado
@@ -142,7 +146,92 @@ async function transcribeAudioFromUrl(audioUrl, phoneNumber, outputDir = './temp
         const fileStream = fs.createReadStream(audioPath);
         const file = await toFile(fileStream, 'audio.ogg', { type: 'audio/ogg' });
 
-        const transcription = await openai.audio.transcriptions.create({
+        const transcription = await getOpenAI().audio.transcriptions.create({
+            file,
+            model: 'whisper-1',
+            response_format: 'verbose_json',
+            temperature: 0.2,
+        });
+
+        const latency = Date.now() - start;
+        console.log(`✅ Transcrito em ${latency}ms (${transcription.language}): "${transcription.text}"`);
+
+        return {
+            text: transcription.text,
+            language: transcription.language || 'unknown',
+            confidence: 'high',
+            transcriptionLatency: latency,
+        };
+    } finally {
+        if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
+    }
+}
+
+/**
+ * Transcreve áudio do WhatsApp via WASenderAPI (descriptografa na API) + Whisper.
+ * Tenta 3 endpoints comuns do WASenderAPI antes de cair no download direto.
+ */
+async function transcribeAudioViaWASender({ audioMessage, phoneNumber, sessionId, outputDir = '/tmp/sofia_audio', waToken, waBaseUrl }) {
+    if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    const audioPath = path.join(outputDir, `audio_${Date.now()}.ogg`);
+
+    // Tenta baixar via WASenderAPI (descriptografado)
+    let downloaded = false;
+
+    const baseUrl = (waBaseUrl || 'https://www.wasenderapi.com/api').replace(/\/$/, '');
+    const headers = { 'Authorization': `Bearer ${waToken}`, 'Content-Type': 'application/json' };
+    const body = {
+        sessionId,
+        messageKey: audioMessage._messageKey,
+        message: audioMessage,
+    };
+
+    // Endpoints comuns de download de mídia em APIs baseadas em Baileys
+    const downloadEndpoints = [
+        `${baseUrl}/download-media`,
+        `${baseUrl}/messages/download`,
+        `${baseUrl}/media/download`,
+    ];
+
+    for (const endpoint of downloadEndpoints) {
+        try {
+            const resp = await fetch(endpoint, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(body),
+                signal: AbortSignal.timeout(15000),
+            });
+            if (!resp.ok) continue;
+            const data = await resp.json();
+            // Resposta com base64
+            const b64 = data?.data?.base64 || data?.base64 || data?.buffer;
+            if (b64) {
+                fs.writeFileSync(audioPath, Buffer.from(b64, 'base64'));
+                downloaded = true;
+                console.log(`📥 Áudio descriptografado via ${endpoint}`);
+                break;
+            }
+        } catch (_) { /* tenta próximo */ }
+    }
+
+    // Fallback: tenta URL direta (funciona se a API já entregar descriptografada)
+    if (!downloaded && audioMessage.url) {
+        console.log(`📥 Tentando URL direta (fallback): ${audioMessage.url.substring(0, 60)}...`);
+        await downloadFile(audioMessage.url, audioPath, {});
+        downloaded = true;
+    }
+
+    if (!downloaded) throw new Error('Não foi possível baixar o áudio');
+
+    try {
+        const start = Date.now();
+        const { toFile } = require('openai');
+        const file = await toFile(fs.createReadStream(audioPath), 'audio.ogg', { type: 'audio/ogg' });
+
+        const transcription = await getOpenAI().audio.transcriptions.create({
             file,
             model: 'whisper-1',
             response_format: 'verbose_json',
@@ -176,4 +265,4 @@ function detectMediaTypeFromMime(mimeType) {
     return 'unknown';
 }
 
-module.exports = { transcribeAudio, detectMediaType, createAudioContext, transcribeAudioFromUrl, detectMediaTypeFromMime };
+module.exports = { transcribeAudio, detectMediaType, createAudioContext, transcribeAudioFromUrl, transcribeAudioViaWASender, detectMediaTypeFromMime };

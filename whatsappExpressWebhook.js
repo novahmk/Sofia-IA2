@@ -263,6 +263,8 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
     let texto = null;
     let pushName = 'Cliente';
     let audioUrl = null;
+    let audioMessage = null;  // objeto completo para descriptografia via API
+    let webhookSessionId = null;
 
     // Formato WASenderAPI (messages.received ou sem event)
     if (req.body.data?.messages) {
@@ -271,8 +273,13 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
       from = key.cleanedSenderPn || key.senderPn || key.remoteJid;
       texto = msg.messageBody || msg.message?.conversation || msg.message?.extendedTextMessage?.text;
       pushName = msg.pushName || req.body.data.pushName || pushName;
+      webhookSessionId = req.body.sessionId || null;
       // Detectar áudio (audioMessage = gravação, pttMessage = push-to-talk)
-      audioUrl = msg.message?.audioMessage?.url || msg.message?.pttMessage?.url || null;
+      if (msg.message?.audioMessage || msg.message?.pttMessage) {
+        audioMessage = msg.message.audioMessage || msg.message.pttMessage;
+        audioMessage._messageKey = key;  // inclui key para download via API
+        audioUrl = audioMessage.url || null;
+      }
       if (key.fromMe === true) {
         console.log(`🔄 [${reqId}] fromMe, ignorando`);
         return;
@@ -314,11 +321,15 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
         if (process.env.OPENAI_API_KEY) {
           try {
             console.log(`🎙️ [${reqId}] Áudio de ${from} — transcrevendo via Whisper...`);
-            const { transcribeAudioFromUrl } = require('./audioProcessor');
-            // URL já vem descriptografada pela WASenderAPI — sem necesidade de auth
-            const transcription = await transcribeAudioFromUrl(
-              audioUrl, from, '/tmp/sofia_audio'
-            );
+            const { transcribeAudioViaWASender } = require('./audioProcessor');
+            const transcription = await transcribeAudioViaWASender({
+              audioMessage,
+              phoneNumber: from,
+              sessionId: webhookSessionId,
+              outputDir: '/tmp/sofia_audio',
+              waToken: WASENDERAPI_TOKEN,
+              waBaseUrl: WASENDERAPI_BASE_URL,
+            });
             texto = transcription.text;
             console.log(`✅ [${reqId}] Transcrição (${transcription.language}): "${texto.substring(0, 80)}"`);
           } catch (transcribeErr) {
