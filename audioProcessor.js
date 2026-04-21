@@ -128,6 +128,7 @@ async function transcribeAudioFromUrl(audioUrl, phoneNumber, outputDir = './temp
 
     console.log(`🎙️ Processando áudio de ${phoneNumber} via URL...`);
 
+    // WhatsApp envia áudio como OGG/Opus — Whisper aceita .ogg com nome explícito
     const audioPath = path.join(outputDir, `audio_${Date.now()}.ogg`);
 
     // Baixar áudio da URL
@@ -136,15 +137,20 @@ async function transcribeAudioFromUrl(audioUrl, phoneNumber, outputDir = './temp
     try {
         const start = Date.now();
 
+        // Passa o nome do arquivo explicitamente para o Whisper reconhecer o formato OGG
+        const { toFile } = require('openai');
+        const fileStream = fs.createReadStream(audioPath);
+        const file = await toFile(fileStream, 'audio.ogg', { type: 'audio/ogg' });
+
         const transcription = await openai.audio.transcriptions.create({
-            file: fs.createReadStream(audioPath),
+            file,
             model: 'whisper-1',
             response_format: 'verbose_json',
             temperature: 0.2,
         });
 
         const latency = Date.now() - start;
-        console.log(`✅ Transcrito em ${latency}ms: "${transcription.text}"`);
+        console.log(`✅ Transcrito em ${latency}ms (${transcription.language}): "${transcription.text}"`);
 
         return {
             text: transcription.text,
