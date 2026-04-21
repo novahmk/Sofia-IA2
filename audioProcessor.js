@@ -2,12 +2,49 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const http = require('http');
+const crypto = require('crypto');
 const { OpenAI } = require('openai');
 
 let _openai = null;
 function getOpenAI() {
     if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     return _openai;
+}
+
+/**
+ * Descriptografa mídia do WhatsApp usando AES-256-CBC + HKDF-SHA256.
+ * O WhatsApp criptografa todas as mídias antes de enviar ao CDN.
+ * @param {Buffer} encryptedData - arquivo baixado do CDN
+ * @param {string} mediaKeyB64 - mediaKey em base64 do payload do webhook
+ * @param {string} mediaType - 'Audio' | 'Video' | 'Image' | 'Document'
+ */
+function decryptWhatsAppMedia(encryptedData, mediaKeyB64, mediaType = 'Audio') {
+    const mediaKey = Buffer.from(mediaKeyB64, 'base64');
+    const info = Buffer.from(`WhatsApp ${mediaType} Keys`);
+
+    // HKDF-SHA256: extrai 112 bytes
+    const prk = crypto.createHmac('sha256', Buffer.alloc(32)).update(mediaKey).digest();
+    let t = Buffer.alloc(0);
+    let okm = Buffer.alloc(0);
+    for (let i = 1; okm.length < 112; i++) {
+        const hmac = crypto.createHmac('sha256', prk);
+        hmac.update(t);
+        hmac.update(info);
+        hmac.update(Buffer.from([i]));
+        t = hmac.digest();
+        okm = Buffer.concat([okm, t]);
+    }
+    okm = okm.slice(0, 112);
+
+    const iv = okm.slice(0, 16);
+    const cipherKey = okm.slice(16, 48);
+
+    // Remove 10 bytes de MAC do final
+    const ciphertext = encryptedData.slice(0, encryptedData.length - 10);
+
+    const decipher = crypto.createDecipheriv('aes-256-cbc', cipherKey, iv);
+    decipher.setAutoPadding(true);
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }
 
 async function transcribeAudio(message, preDownloadedMedia = null, outputDir = './temp_audio') {
@@ -177,49 +214,55 @@ async function transcribeAudioViaWASender({ audioMessage, phoneNumber, sessionId
     }
 
     const audioPath = path.join(outputDir, `audio_${Date.now()}.ogg`);
-
-    // Tenta baixar via WASenderAPI (descriptografado)
     let downloaded = false;
 
-    const baseUrl = (waBaseUrl || 'https://www.wasenderapi.com/api').replace(/\/$/, '');
-    const headers = { 'Authorization': `Bearer ${waToken}`, 'Content-Type': 'application/json' };
-    const body = {
-        sessionId,
-        messageKey: audioMessage._messageKey,
-        message: audioMessage,
-    };
-
-    // Endpoints comuns de download de mídia em APIs baseadas em Baileys
-    const downloadEndpoints = [
-        `${baseUrl}/download-media`,
-        `${baseUrl}/messages/download`,
-        `${baseUrl}/media/download`,
-    ];
-
-    for (const endpoint of downloadEndpoints) {
+    // 1ª tentativa: baixar criptografado + descriptografar com mediaKey
+    const mediaKey = audioMessage.mediaKey || audioMessage.MediaKey || null;
+    if (audioMessage.url && mediaKey) {
+        console.log(`📥 Baixando áudio criptografado do CDN WhatsApp...`);
+        const encPath = audioPath + '.enc';
         try {
-            const resp = await fetch(endpoint, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify(body),
-                signal: AbortSignal.timeout(15000),
-            });
-            if (!resp.ok) continue;
-            const data = await resp.json();
-            // Resposta com base64
-            const b64 = data?.data?.base64 || data?.base64 || data?.buffer;
-            if (b64) {
-                fs.writeFileSync(audioPath, Buffer.from(b64, 'base64'));
-                downloaded = true;
-                console.log(`📥 Áudio descriptografado via ${endpoint}`);
-                break;
-            }
-        } catch (_) { /* tenta próximo */ }
+            await downloadFile(audioMessage.url, encPath, {});
+            const encData = fs.readFileSync(encPath);
+            const decData = decryptWhatsAppMedia(encData, mediaKey, 'Audio');
+            fs.writeFileSync(audioPath, decData);
+            downloaded = true;
+            console.log(`🔓 Áudio descriptografado localmente (${decData.length} bytes)`);
+        } catch (decErr) {
+            console.warn(`⚠️ Descriptografia local falhou: ${decErr.message} — tentando API...`);
+        } finally {
+            if (fs.existsSync(encPath)) fs.unlinkSync(encPath);
+        }
     }
 
-    // Fallback: tenta URL direta (funciona se a API já entregar descriptografada)
+    // 2ª tentativa: endpoint da WASenderAPI
+    if (!downloaded) {
+        const baseUrl = (waBaseUrl || 'https://www.wasenderapi.com/api').replace(/\/$/, '');
+        const headers = { 'Authorization': `Bearer ${waToken}`, 'Content-Type': 'application/json' };
+        const body = { sessionId, messageKey: audioMessage._messageKey, message: audioMessage };
+
+        for (const endpoint of [`${baseUrl}/download-media`, `${baseUrl}/messages/download`, `${baseUrl}/media/download`]) {
+            try {
+                const resp = await fetch(endpoint, {
+                    method: 'POST', headers, body: JSON.stringify(body),
+                    signal: AbortSignal.timeout(10000),
+                });
+                if (!resp.ok) continue;
+                const data = await resp.json();
+                const b64 = data?.data?.base64 || data?.base64 || data?.buffer;
+                if (b64) {
+                    fs.writeFileSync(audioPath, Buffer.from(b64, 'base64'));
+                    downloaded = true;
+                    console.log(`📥 Áudio via API: ${endpoint}`);
+                    break;
+                }
+            } catch (_) { /* tenta próximo */ }
+        }
+    }
+
+    // 3ª tentativa: URL direta sem descriptografia (por se a API já entregue decriptada)
     if (!downloaded && audioMessage.url) {
-        console.log(`📥 Tentando URL direta (fallback): ${audioMessage.url.substring(0, 60)}...`);
+        console.log(`📥 Tentando URL direta sem descriptografia...`);
         await downloadFile(audioMessage.url, audioPath, {});
         downloaded = true;
     }
