@@ -381,3 +381,21 @@ setTimeout(() => {
   console.log('⏰ Iniciando cron de follow-up...');
   followUpManager.startCron(enviarMensagem);
 }, 5000);
+
+// ── Self-Improvement Analytics (a cada 6h) ──
+setInterval(async () => {
+  console.log('\n🔄 [SELF-IMPROVEMENT] Ciclo de analytics (6h)...');
+  try {
+    const selfImprovement = require('./improvement/selfImprovement');
+    const stats = selfImprovement.getStats();
+    console.log('📊 [SELF-IMPROVEMENT] Stats por agente:', JSON.stringify(stats.stats));
+    const playbooks = require('./improvement/playbookStorage');
+    const top = playbooks.getTop(5);
+    if (top.length > 0) {
+      console.log(`📖 [SELF-IMPROVEMENT] Top ${top.length} playbooks:`);
+      top.forEach(p => console.log(`   - [${p.intentionType}] taxa: ${(p.successRate * 100).toFixed(0)}% usos: ${p.usageCount}`));
+    }
+  } catch (e) {
+    console.warn('⚠️ [SELF-IMPROVEMENT] Ciclo falhou:', e.message);
+  }
+}, 6 * 60 * 60 * 1000);
