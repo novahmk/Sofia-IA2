@@ -225,10 +225,21 @@ async function transcribeAudioViaWASender({ audioMessage, phoneNumber, sessionId
     // Passo 1: chamar o Decrypt Media File API da WASenderAPI
     // Retorna { publicUrl } válida por 1 hora com o OGG já descriptografado
     console.log(`🔓 [Audio] Solicitando descriptografia via WASenderAPI /decrypt-media...`);
+    const isPtt = audioMessage._type === 'ptt';
+    const messagePayload = isPtt
+        ? { pttMessage: audioMessage }
+        : { audioMessage: audioMessage };
+
     const decryptResp = await fetch(`${baseUrl}/decrypt-media`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${waToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: encUrl, mediaKey, mimetype: audioMessage.mimetype || 'audio/ogg; codecs=opus' }),
+        body: JSON.stringify({
+            data: {
+                messages: {
+                    message: messagePayload
+                }
+            }
+        }),
         signal: AbortSignal.timeout(20000),
     });
 

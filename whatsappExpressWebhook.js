@@ -276,8 +276,10 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
       webhookSessionId = req.body.sessionId || null;
       // Detectar áudio (audioMessage = gravação, pttMessage = push-to-talk)
       if (msg.message?.audioMessage || msg.message?.pttMessage) {
+        const isPtt = !!msg.message.pttMessage;
         audioMessage = msg.message.audioMessage || msg.message.pttMessage;
-        audioMessage._messageKey = key;  // inclui key para download via API
+        audioMessage._messageKey = key;
+        audioMessage._type = isPtt ? 'ptt' : 'audio';  // para montar payload correto
         audioUrl = audioMessage.url || null;
       }
       if (key.fromMe === true) {
