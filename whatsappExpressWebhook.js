@@ -31,6 +31,8 @@ const leadMemory = require('./leadSystem/leadMemory');
 const eventBus = require('./eventBus');
 const followUpManager = require('./leadSystem/followUpManager');
 const selfImprovement = require('./improvement/selfImprovement');
+const messageQueue = require('./messageQueue');
+const responseCache = require('./responseCache');
 
 try {
   const ai = require('./ai');
@@ -96,6 +98,22 @@ function rawBodySaver(req, res, buf, encoding) {
 }
 app.use(express.json({ verify: rawBodySaver, limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, verify: rawBodySaver, limit: '1mb' }));
+
+// ── express-rate-limit: proteção HTTP contra flood ──
+const rateLimit = require('express-rate-limit');
+// Limita /webhook a 60 req/min por IP (proteção global)
+const webhookRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: parseInt(process.env.WEBHOOK_RATE_LIMIT || '60', 10),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) =>
+    req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown',
+  handler: (req, res) => {
+    console.warn(`🚫 [HTTP rate-limit] IP ${req.headers['x-forwarded-for'] || req.socket?.remoteAddress}`);
+    res.status(429).json({ error: 'Too Many Requests' });
+  },
+});
 
 // ── Auth ──
 function safeCompare(a, b) {
@@ -180,7 +198,7 @@ app.get('/webhook', (req, res) => {
 app.use('/api', require('./dashboardApi'));
 
 // ── POST /webhook — Processamento principal ──
-app.post('/webhook', async (req, res) => {
+app.post('/webhook', webhookRateLimiter, async (req, res) => {
   const reqId = Date.now().toString(36);
   console.log(`\n${'='.repeat(60)}`);
   console.log(`📨 [${reqId}] WEBHOOK - ${new Date().toISOString()}`);
@@ -306,20 +324,34 @@ app.post('/webhook', async (req, res) => {
       } catch (e) { /* blacklist não essencial */ }
     }
 
-    // STEP 4: Gerar resposta via Supervisor Multi-Agent
-    console.log(`🤖 [${reqId}] Supervisor processando...`);
-    // Feedback loop: informa a mensagem atual para fechar o ciclo da msg anterior
+    // STEP 4: Gerar resposta via fila serial por telefone (evita concorrência)
+    console.log(`🤖 [${reqId}] Enfileirando para ${from}...`);
     selfImprovement.feedNextMessage(from, textoLimpo);
-    // Publica evento de mensagem recebida para o dashboard
     eventBus.publish('message_received', { phone: from, nome: pushName, message: textoLimpo.substring(0, 80) });
+
     const startAI = Date.now();
-    const result = await supervisor.processMessage(
-      from,
-      textoLimpo,
-      pushName || 'Cliente'
-    );
+    const result = await messageQueue.enqueue(from, async () => {
+      // Verificar cache antes de chamar a IA
+      const lead = await leadMemory.getLead(from).catch(() => null);
+      const etapa = lead?.etapa_funil || 'novo';
+      const cached = await responseCache.get(textoLimpo, etapa);
+      if (cached) {
+        console.log(`⚡ [${reqId}] Cache hit (${etapa}) — saltou OpenAI`);
+        return { response: cached, _fromCache: true };
+      }
+
+      const r = await supervisor.processMessage(from, textoLimpo, pushName || 'Cliente');
+
+      // Salva no cache apenas respostas factuais (não personalizadas)
+      // Heurística: se a resposta não contém o nome do lead, é cacheável
+      const isPersonalized = r.response && lead?.nome && r.response.includes(lead.nome);
+      if (r.response && !isPersonalized) {
+        await responseCache.set(textoLimpo, etapa, r.response);
+      }
+      return r;
+    });
     const respostaIA = result.response;
-    console.log(`✅ [${reqId}] supervisor em ${Date.now() - startAI}ms`);
+    console.log(`✅ [${reqId}] supervisor em ${Date.now() - startAI}ms${result._fromCache ? ' (cache)' : ''}`);
 
     if (!respostaIA) {
       console.error(`❌ [${reqId}] Resposta vazia`);

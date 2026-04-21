@@ -12,11 +12,22 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Armazena o histórico da conversa por ID do usuário
-const chatHistories = {};
-
-// Armazena análise de intenção por ID do usuário
-const customerIntents = {};
+// ── Estado: in-memory com fallback para Redis (quando REDIS_URL configurado) ──
+// getSync/setSync mantêm compatibilidade com o código síncrono existente;
+// o Redis é atualizado em background via setSync.
+const { chatHistoriesAdapter, customerIntentsAdapter } = require('./redisStateAdapter');
+const chatHistories       = new Proxy({}, {
+  get: (_, id) => chatHistoriesAdapter.getSync(id),
+  set: (_, id, val) => { chatHistoriesAdapter.setSync(id, val); return true; },
+  has: (_, id) => chatHistoriesAdapter.has(id),
+  deleteProperty: (_, id) => { chatHistoriesAdapter.delete(id); return true; },
+});
+const customerIntents = new Proxy({}, {
+  get: (_, id) => customerIntentsAdapter.getSync(id),
+  set: (_, id, val) => { customerIntentsAdapter.setSync(id, val); return true; },
+  has: (_, id) => customerIntentsAdapter.has(id),
+  deleteProperty: (_, id) => { customerIntentsAdapter.delete(id); return true; },
+});
 
 // Armazena últimas respostas da Sofia por ID do usuário (anti-repetição)
 const lastResponses = {};
