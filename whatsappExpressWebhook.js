@@ -262,6 +262,7 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
     let from = null;
     let texto = null;
     let pushName = 'Cliente';
+    let audioUrl = null;
 
     // Formato WASenderAPI (messages.received ou sem event)
     if (req.body.data?.messages) {
@@ -270,6 +271,8 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
       from = key.cleanedSenderPn || key.senderPn || key.remoteJid;
       texto = msg.messageBody || msg.message?.conversation || msg.message?.extendedTextMessage?.text;
       pushName = msg.pushName || req.body.data.pushName || pushName;
+      // Detectar áudio (audioMessage = gravação, pttMessage = push-to-talk)
+      audioUrl = msg.message?.audioMessage?.url || msg.message?.pttMessage?.url || null;
       if (key.fromMe === true) {
         console.log(`🔄 [${reqId}] fromMe, ignorando`);
         return;
@@ -291,14 +294,12 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
       pushName = req.body.pushName || pushName;
     }
 
-    if (!from || !texto?.trim()) {
-      console.warn(`⚠️ [${reqId}] Sem from/texto. Body: ${JSON.stringify(req.body).substring(0, 500)}`);
+    if (!from) {
+      console.warn(`⚠️ [${reqId}] Sem from. Body: ${JSON.stringify(req.body).substring(0, 500)}`);
       return;
     }
 
-    texto = texto.trim();
-
-    // Limpar número E.164
+    // Limpar número E.164 antes de qualquer envio
     from = String(from)
       .replace(/@s\.whatsapp\.net$/, '')
       .replace(/@lid$/, '')
@@ -306,6 +307,36 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
       .replace(/[\s()-]/g, '')
       .trim();
     if (from && !from.startsWith('+')) from = '+' + from;
+
+    // Sem texto: tentar transcrever áudio ou pedir para digitar
+    if (!texto?.trim()) {
+      if (audioUrl) {
+        if (process.env.OPENAI_API_KEY) {
+          try {
+            console.log(`🎙️ [${reqId}] Áudio de ${from} — transcrevendo via Whisper...`);
+            const { transcribeAudioFromUrl } = require('./audioProcessor');
+            const transcription = await transcribeAudioFromUrl(
+              audioUrl, from, '/tmp/sofia_audio',
+              { 'Authorization': `Bearer ${WASENDERAPI_TOKEN}` }
+            );
+            texto = transcription.text;
+            console.log(`✅ [${reqId}] Transcrição (${transcription.language}): "${texto.substring(0, 80)}"`);
+          } catch (transcribeErr) {
+            console.warn(`⚠️ [${reqId}] Transcrição falhou: ${transcribeErr.message}`);
+            await enviarMensagem(from, 'Recebi seu áudio! 🎙️ No momento, processo melhor mensagens de texto. Pode escrever o que precisa?');
+            return;
+          }
+        } else {
+          await enviarMensagem(from, 'Recebi seu áudio! 🎙️ No momento, processo melhor mensagens de texto. Pode escrever o que precisa?');
+          return;
+        }
+      } else {
+        console.warn(`⚠️ [${reqId}] Sem texto nem áudio. Body: ${JSON.stringify(req.body).substring(0, 500)}`);
+        return;
+      }
+    }
+
+    texto = texto.trim();
 
     console.log(`📱 [${reqId}] De: ${from} | Msg: "${texto.substring(0, 80)}"`);
 
