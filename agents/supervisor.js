@@ -23,6 +23,7 @@ const agentCommercial = require('./agentCommercial');
 const agentTechnical = require('./agentTechnical');
 const agentAdministrative = require('./agentAdministrative');
 const selfImprovement = require('../improvement/selfImprovement');
+const eventBus = require('../eventBus');
 
 // Mesma lógica de progressão de funil do commercialFlow (mantém compatibilidade)
 function detectFunnelProgression(lead, userMessage) {
@@ -118,8 +119,25 @@ class SupervisorAgent {
       await followUpManager.scheduleFollowUp(phone, 2, 'primeiro_contato');
     }
 
-    // 8. Feedback loop em background (não bloqueia resposta)
     const latency = Date.now() - start;
+
+    // 8. Publica eventos para o dashboard (SSE)
+    eventBus.publish('agent_routed', {
+      phone,
+      agent: intention.agent,
+      intentionType: intention.type,
+    });
+    eventBus.publish('message_sent', {
+      phone,
+      nome: lead.nome,
+      response: response?.substring(0, 100),
+      agentUsed: intention.agent,
+      intentionType: intention.type,
+      latencyMs: latency,
+      leadStage: lead.etapa_funil,
+    });
+
+    // 9. Feedback loop em background (não bloqueia resposta)
     setImmediate(() => {
       selfImprovement.analyze(phone, userMessage, response, {
         agentUsed: intention.agent,
