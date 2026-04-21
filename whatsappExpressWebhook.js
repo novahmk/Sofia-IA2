@@ -34,6 +34,9 @@ const selfImprovement = require('./improvement/selfImprovement');
 const messageQueue = require('./messageQueue');
 const responseCache = require('./responseCache');
 const { jaFoiProcessada, marcarComoProcessada, salvarMensagem } = require('./conversationDB');
+const { carregarHistorico, injetarContextoFrio } = require('./conversationDB');
+const leadDB = require('./leadDB');
+const { chamarIA } = require('./sdrAI');
 
 try {
   const ai = require('./ai');
@@ -412,6 +415,8 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
     await marcarComoProcessada(messageId);
     // Persistir mensagem do usuário no histórico PostgreSQL
     await salvarMensagem(from, 'user', textoLimpo, audioUrl ? 'audio' : 'text');
+    // Atualizar timestamp de contato
+    await leadDB.atualizarUltimoContato(from).catch(() => {});
 
     selfImprovement.feedNextMessage(from, textoLimpo);
     eventBus.publish('message_received', { phone: from, nome: pushName, message: textoLimpo.substring(0, 80) });
@@ -419,26 +424,67 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
     const startAI = Date.now();
     const result = await messageQueue.enqueue(from, async () => {
       // Verificar cache antes de chamar a IA
-      const lead = await leadMemory.getOrCreateLead(from).catch(() => null);
-      const etapa = lead?.etapa_funil || 'novo';
+      const lead = await leadDB.buscarOuCriarLead(from).catch(() => ({ status: 'novo', score: 0 }));
+
+      // Cancelar follow-up pendente pois o lead respondeu
+      await leadDB.cancelarFollowUpPendente(from).catch(() => {});
+
+      const etapa = lead?.status || lead?.etapa_funil || 'novo';
       const cached = await responseCache.get(textoLimpo, etapa);
       if (cached) {
         console.log(`⚡ [${reqId}] Cache hit (${etapa}) — saltou OpenAI`);
         return { response: cached, _fromCache: true };
       }
 
-      const r = await supervisor.processMessage(from, textoLimpo, pushName || 'Cliente');
+      // Carregar histórico PostgreSQL e dados de contexto
+      const historico = await carregarHistorico(from, 20);
+      const isPrimeiroContato = historico.filter(h => h.role === 'user').length <= 1;
 
-      // Salva no cache apenas respostas factuais (não personalizadas)
-      // Heurística: se a resposta não contém o nome do lead, é cacheável
-      const isPersonalized = r.response && lead?.nome && r.response.includes(lead.nome);
-      if (r.response && !isPersonalized) {
-        await responseCache.set(textoLimpo, etapa, r.response);
+      // Contexto frio via leads.ultimo_contato
+      const horasFrio = lead.ultimo_contato
+        ? (() => {
+            const h = (Date.now() - new Date(lead.ultimo_contato).getTime()) / 3_600_000;
+            return h > 4 ? Math.round(h) : null;
+          })()
+        : null;
+
+      // Chamar IA com output JSON estruturado (sdrAI)
+      let sdrResult;
+      try {
+        sdrResult = await chamarIA({ telefone: from, textoFinal: textoLimpo, historico, lead, horasFrio, isPrimeiroContato });
+      } catch (sdrErr) {
+        console.warn(`⚠️ [${reqId}] sdrAI falhou, fallback supervisor: ${sdrErr.message}`);
+        const r = await supervisor.processMessage(from, textoLimpo, pushName || 'Cliente');
+        return { response: r.response, _fromSupervisor: true };
       }
-      return r;
+
+      const resposta = sdrResult.texto;
+
+      // Atualizar campos estruturados do lead
+      await leadDB.atualizarLead(from, {
+        status: sdrResult.lead_status,
+        intencao: sdrResult.lead_intent,
+        resumo_conversa: sdrResult.resumo_lead,
+        score: sdrResult.score,
+        nome: lead.nome || pushName !== 'Cliente' ? pushName : undefined,
+      }).catch(() => {});
+
+      // Agendar retorno se IA detectou pedido do lead
+      if (sdrResult.agendamento_retorno) {
+        await leadDB.agendarRetorno(from, sdrResult.agendamento_retorno, sdrResult.resumo_lead).catch(() => {});
+      }
+
+      // Salva no cache apenas respostas não personalizadas
+      const isPersonalized = lead?.nome && resposta.includes(lead.nome);
+      if (resposta && !isPersonalized) {
+        await responseCache.set(textoLimpo, etapa, resposta);
+      }
+
+      return { response: resposta, _sdrMeta: sdrResult };
     });
+
     const respostaIA = result.response;
-    console.log(`✅ [${reqId}] supervisor em ${Date.now() - startAI}ms${result._fromCache ? ' (cache)' : ''}`);
+    console.log(`✅ [${reqId}] resposta em ${Date.now() - startAI}ms${result._fromCache ? ' (cache)' : ''}`);
 
     if (!respostaIA) {
       console.error(`❌ [${reqId}] Resposta vazia`);
@@ -506,8 +552,16 @@ if (knowledgeBase && typeof knowledgeBase.initialize === 'function') {
 
 // ── Follow-up Cron (5s após o servidor subir) ──
 setTimeout(() => {
-  console.log('⏰ Iniciando cron de follow-up...');
+  console.log('⏰ Iniciando cron de follow-up (legado)...');
   followUpManager.startCron(enviarMensagem);
+
+  // Novo cron SDR (node-cron) com follow-up estruturado + retornos agendados
+  try {
+    const followUpCron = require('./followUpCron');
+    followUpCron.init(enviarMensagem);
+  } catch (e) {
+    console.warn('⚠️ followUpCron não disponível:', e.message);
+  }
 }, 5000);
 
 // ── Self-Improvement Analytics (a cada 6h) ──

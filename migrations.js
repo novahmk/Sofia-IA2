@@ -98,6 +98,16 @@ async function runMigrations() {
                 processado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
 
+            -- Agendamentos de retorno solicitados pelo lead ("fala comigo amanhã")
+            CREATE TABLE IF NOT EXISTS agendamentos_retorno (
+                id          SERIAL PRIMARY KEY,
+                telefone    TEXT NOT NULL,
+                retornar_em TIMESTAMPTZ NOT NULL,
+                motivo      TEXT,
+                executado   BOOLEAN NOT NULL DEFAULT FALSE,
+                criado_em   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
             -- FASE 1: Playbooks de respostas bem-sucedidas (Self-Improvement)
             CREATE TABLE IF NOT EXISTS agent_interactions (
                 id              SERIAL PRIMARY KEY,
@@ -131,7 +141,27 @@ async function runMigrations() {
             CREATE INDEX IF NOT EXISTS idx_agent_interactions_phone  ON agent_interactions(phone);
             CREATE INDEX IF NOT EXISTS idx_agent_interactions_agent  ON agent_interactions(agent_used);
             CREATE INDEX IF NOT EXISTS idx_agent_interactions_time   ON agent_interactions(created_at);
+            CREATE INDEX IF NOT EXISTS idx_agend_retorno_telefone ON agendamentos_retorno(telefone);
+            CREATE INDEX IF NOT EXISTS idx_agend_retorno_exec     ON agendamentos_retorno(executado, retornar_em);
         `);
+
+        // Colunas adicionais na tabela leads (idempotente via ALTER TABLE IF NOT EXISTS)
+        const leadCols = [
+            `ALTER TABLE leads ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'novo'`,
+            `ALTER TABLE leads ADD COLUMN IF NOT EXISTS intencao TEXT`,
+            `ALTER TABLE leads ADD COLUMN IF NOT EXISTS score INTEGER DEFAULT 0`,
+            `ALTER TABLE leads ADD COLUMN IF NOT EXISTS procedimento_interesse TEXT`,
+            `ALTER TABLE leads ADD COLUMN IF NOT EXISTS resumo_conversa TEXT`,
+            `ALTER TABLE leads ADD COLUMN IF NOT EXISTS primeiro_contato TIMESTAMPTZ DEFAULT NOW()`,
+            `ALTER TABLE leads ADD COLUMN IF NOT EXISTS ultimo_contato TIMESTAMPTZ DEFAULT NOW()`,
+            `ALTER TABLE leads ADD COLUMN IF NOT EXISTS agendado_em TIMESTAMPTZ`,
+            `ALTER TABLE leads ADD COLUMN IF NOT EXISTS follow_up_count_new INTEGER DEFAULT 0`,
+            `ALTER TABLE leads ADD COLUMN IF NOT EXISTS follow_up_proximo TIMESTAMPTZ`,
+            `ALTER TABLE leads ADD COLUMN IF NOT EXISTS redirecionado_comercial BOOLEAN DEFAULT FALSE`,
+        ];
+        for (const sql of leadCols) {
+            await client.query(sql).catch(() => {}); // ignora se coluna já existe
+        }
 
         console.log('✅ Índices criados\n');
         console.log('🎉 Migrations concluídas! Volte o Start Command para: node index.js');
