@@ -214,60 +214,39 @@ async function transcribeAudioViaWASender({ audioMessage, phoneNumber, sessionId
     }
 
     const audioPath = path.join(outputDir, `audio_${Date.now()}.ogg`);
-    let downloaded = false;
-
-    // 1ª tentativa: baixar criptografado + descriptografar com mediaKey
+    const baseUrl = (waBaseUrl || 'https://www.wasenderapi.com/api').replace(/\/$/, '');
     const mediaKey = audioMessage.mediaKey || audioMessage.MediaKey || null;
-    if (audioMessage.url && mediaKey) {
-        console.log(`📥 Baixando áudio criptografado do CDN WhatsApp...`);
-        const encPath = audioPath + '.enc';
-        try {
-            await downloadFile(audioMessage.url, encPath, {});
-            const encData = fs.readFileSync(encPath);
-            const decData = decryptWhatsAppMedia(encData, mediaKey, 'Audio');
-            fs.writeFileSync(audioPath, decData);
-            downloaded = true;
-            console.log(`🔓 Áudio descriptografado localmente (${decData.length} bytes)`);
-        } catch (decErr) {
-            console.warn(`⚠️ Descriptografia local falhou: ${decErr.message} — tentando API...`);
-        } finally {
-            if (fs.existsSync(encPath)) fs.unlinkSync(encPath);
-        }
+    const encUrl = audioMessage.url || null;
+
+    if (!encUrl || !mediaKey) {
+        throw new Error(`Áudio sem url ou mediaKey no payload (url=${!!encUrl}, mediaKey=${!!mediaKey})`);
     }
 
-    // 2ª tentativa: endpoint da WASenderAPI
-    if (!downloaded) {
-        const baseUrl = (waBaseUrl || 'https://www.wasenderapi.com/api').replace(/\/$/, '');
-        const headers = { 'Authorization': `Bearer ${waToken}`, 'Content-Type': 'application/json' };
-        const body = { sessionId, messageKey: audioMessage._messageKey, message: audioMessage };
+    // Passo 1: chamar o Decrypt Media File API da WASenderAPI
+    // Retorna { publicUrl } válida por 1 hora com o OGG já descriptografado
+    console.log(`🔓 [Audio] Solicitando descriptografia via WASenderAPI /decrypt-media...`);
+    const decryptResp = await fetch(`${baseUrl}/decrypt-media`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${waToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: encUrl, mediaKey, mimetype: audioMessage.mimetype || 'audio/ogg; codecs=opus' }),
+        signal: AbortSignal.timeout(20000),
+    });
 
-        for (const endpoint of [`${baseUrl}/download-media`, `${baseUrl}/messages/download`, `${baseUrl}/media/download`]) {
-            try {
-                const resp = await fetch(endpoint, {
-                    method: 'POST', headers, body: JSON.stringify(body),
-                    signal: AbortSignal.timeout(10000),
-                });
-                if (!resp.ok) continue;
-                const data = await resp.json();
-                const b64 = data?.data?.base64 || data?.base64 || data?.buffer;
-                if (b64) {
-                    fs.writeFileSync(audioPath, Buffer.from(b64, 'base64'));
-                    downloaded = true;
-                    console.log(`📥 Áudio via API: ${endpoint}`);
-                    break;
-                }
-            } catch (_) { /* tenta próximo */ }
-        }
+    if (!decryptResp.ok) {
+        const errText = await decryptResp.text().catch(() => '');
+        throw new Error(`WASenderAPI /decrypt-media HTTP ${decryptResp.status}: ${errText.substring(0, 200)}`);
     }
 
-    // 3ª tentativa: URL direta sem descriptografia (por se a API já entregue decriptada)
-    if (!downloaded && audioMessage.url) {
-        console.log(`📥 Tentando URL direta sem descriptografia...`);
-        await downloadFile(audioMessage.url, audioPath, {});
-        downloaded = true;
+    const decryptData = await decryptResp.json();
+    const publicUrl = decryptData?.publicUrl || decryptData?.data?.publicUrl || decryptData?.url;
+
+    if (!publicUrl) {
+        throw new Error(`/decrypt-media não retornou publicUrl. Resposta: ${JSON.stringify(decryptData).substring(0, 200)}`);
     }
 
-    if (!downloaded) throw new Error('Não foi possível baixar o áudio');
+    // Passo 2: baixar o OGG descriptografado da publicUrl
+    console.log(`📥 [Audio] Baixando OGG descriptografado...`);
+    await downloadFile(publicUrl, audioPath, {});
 
     try {
         const start = Date.now();
