@@ -203,9 +203,16 @@ app.post('/webhook', async (req, res) => {
   res.status(200).json({ status: 'received' });
 
   try {
-    // STEP 2: Evento
+    // STEP 2: Evento — aceita todos os eventos que podem conter mensagens recebidas
     const event = req.body.event;
-    if (event && event !== 'messages.received') {
+    const EVENTOS_ACEITOS = [
+      'messages.received',  // WasenderAPI padrão
+      'messages.upsert',    // Baileys / outras versões da WasenderAPI
+      'message',            // formato simples
+      undefined,            // sem campo event (formato flat)
+      null,
+    ];
+    if (event && !EVENTOS_ACEITOS.includes(event)) {
       console.log(`⏭️ [${reqId}] Evento "${event}" ignorado`);
       return;
     }
@@ -225,6 +232,23 @@ app.post('/webhook', async (req, res) => {
       if (key.fromMe === true) {
         console.log(`🔄 [${reqId}] fromMe, ignorando`);
         return;
+      }
+    }
+
+    // Formato messages.upsert (Baileys) — array de mensagens
+    if (!from && req.body.event === 'messages.upsert' && Array.isArray(req.body.data?.messages)) {
+      for (const msg of req.body.data.messages) {
+        const key = msg.key || {};
+        if (key.fromMe) continue;
+        const remote = (key.remoteJid || '').replace(/@s\.whatsapp\.net$/, '').replace(/@.*$/, '');
+        if (!remote || remote.endsWith('@g.us')) continue;
+        from = remote;
+        texto = msg.message?.conversation
+          || msg.message?.extendedTextMessage?.text
+          || msg.messageBody
+          || '';
+        pushName = msg.pushName || req.body.data.pushName || pushName;
+        break;
       }
     }
 
