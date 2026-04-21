@@ -347,7 +347,7 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
     const startAI = Date.now();
     const result = await messageQueue.enqueue(from, async () => {
       // Verificar cache antes de chamar a IA
-      const lead = await leadMemory.getLead(from).catch(() => null);
+      const lead = await leadMemory.getOrCreateLead(from).catch(() => null);
       const etapa = lead?.etapa_funil || 'novo';
       const cached = await responseCache.get(textoLimpo, etapa);
       if (cached) {
