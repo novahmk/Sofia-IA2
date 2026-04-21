@@ -203,16 +203,19 @@ app.post('/webhook', async (req, res) => {
   res.status(200).json({ status: 'received' });
 
   try {
-    // STEP 2: Evento — aceita todos os eventos que podem conter mensagens recebidas
+    // STEP 2: Evento
+    // WasenderAPI dispara múltiplos eventos por mensagem (upsert, update, sent, chats.update...).
+    // Só processamos a mensagem real — o restante são notificações internas.
     const event = req.body.event;
-    const EVENTOS_ACEITOS = [
-      'messages.received',  // WasenderAPI padrão
-      'messages.upsert',    // Baileys / outras versões da WasenderAPI
-      'message',            // formato simples
-      undefined,            // sem campo event (formato flat)
-      null,
-    ];
-    if (event && !EVENTOS_ACEITOS.includes(event)) {
+    const EVENTOS_IGNORADOS = new Set([
+      'messages.upsert',          // duplicata — mesma msg já veio sem event
+      'message.sent',             // eco da mensagem enviada pelo bot
+      'messages.update',          // confirmação de entrega/leitura
+      'chats.update',             // metadados do chat
+      'contacts.update',          // atualização de contato
+      'messages-personal.received', // duplicata do formato principal
+    ]);
+    if (event && EVENTOS_IGNORADOS.has(event)) {
       console.log(`⏭️ [${reqId}] Evento "${event}" ignorado`);
       return;
     }
@@ -222,7 +225,7 @@ app.post('/webhook', async (req, res) => {
     let texto = null;
     let pushName = 'Cliente';
 
-    // Formato WASenderAPI (messages.received)
+    // Formato WASenderAPI (messages.received ou sem event)
     if (req.body.data?.messages) {
       const msg = req.body.data.messages;
       const key = msg.key || {};
@@ -232,23 +235,6 @@ app.post('/webhook', async (req, res) => {
       if (key.fromMe === true) {
         console.log(`🔄 [${reqId}] fromMe, ignorando`);
         return;
-      }
-    }
-
-    // Formato messages.upsert (Baileys) — array de mensagens
-    if (!from && req.body.event === 'messages.upsert' && Array.isArray(req.body.data?.messages)) {
-      for (const msg of req.body.data.messages) {
-        const key = msg.key || {};
-        if (key.fromMe) continue;
-        const remote = (key.remoteJid || '').replace(/@s\.whatsapp\.net$/, '').replace(/@.*$/, '');
-        if (!remote || remote.endsWith('@g.us')) continue;
-        from = remote;
-        texto = msg.message?.conversation
-          || msg.message?.extendedTextMessage?.text
-          || msg.messageBody
-          || '';
-        pushName = msg.pushName || req.body.data.pushName || pushName;
-        break;
       }
     }
 
