@@ -12,5 +12,19 @@
       "createdAt": "2026-04-21T00:18:11.141Z",
       "lastUsedAt": "2026-04-21T00:18:11.163Z"
     }
+  ],
+  "schedule_cancellation": [
+    {
+      "id": "3177b8bc-a35d-4d46-b941-21fcc6e1a88b",
+      "pattern": "preciso cancelar meu agendamento",
+      "normalizedPattern": "preciso cancelar meu agendamento",
+      "intentionType": "schedule_cancellation",
+      "response": "Entendo! 😊\n\nSeu agendamento foi cancelado com sucesso. ✅\n\nVocê pode reagendar a qualquer momento. Basta me chamar novamente! 📅\n\nAlgo mais em que possa ajudá-lo?",
+      "successRate": 0.99,
+      "usageCount": 1,
+      "successCount": 1,
+      "createdAt": "2026-04-21T23:38:54.784Z",
+      "lastUsedAt": "2026-04-21T23:38:54.784Z"
+    }
   ]
 }
