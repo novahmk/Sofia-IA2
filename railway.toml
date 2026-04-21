@@ -1,6 +1,5 @@
 [build]
-builder = "nixpacks"
-buildCommand = "npm ci"
+buildCommand = "npm install --omit=optional"
 
 [deploy]
 startCommand = "node whatsappExpressWebhook.js"
