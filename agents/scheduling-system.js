@@ -102,6 +102,75 @@ function getClientContext(phone) {
   return clientMemory.getClientMemory(phone) || {};
 }
 
+function isMeaningfulName(name) {
+  if (!name) return false;
+  const trimmed = String(name).trim();
+  if (!trimmed || /^cliente$/i.test(trimmed)) return false;
+  if (/^\+?\d+$/.test(trimmed.replace(/[\s()-]/g, ''))) return false;
+  return /[a-zA-ZÀ-ÿ]/.test(trimmed);
+}
+
+function normalizePersonName(name) {
+  return String(name || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function extractProvidedName(message, allowFreeform = false) {
+  const raw = String(message || '').trim();
+  const explicitPatterns = [
+    /meu nome(?: completo)? é\s+([A-Za-zÀ-ÿ'´`.-]+(?:\s+[A-Za-zÀ-ÿ'´`.-]+)+)/i,
+    /sou\s+([A-Za-zÀ-ÿ'´`.-]+(?:\s+[A-Za-zÀ-ÿ'´`.-]+)+)/i,
+    /aqui é\s+([A-Za-zÀ-ÿ'´`.-]+(?:\s+[A-Za-zÀ-ÿ'´`.-]+)+)/i,
+    /pode colocar no nome de\s+([A-Za-zÀ-ÿ'´`.-]+(?:\s+[A-Za-zÀ-ÿ'´`.-]+)+)/i,
+  ];
+
+  for (const pattern of explicitPatterns) {
+    const match = raw.match(pattern);
+    if (match?.[1]) {
+      return normalizePersonName(match[1]);
+    }
+  }
+
+  if (allowFreeform && /^[A-Za-zÀ-ÿ'´`.-]+(?:\s+[A-Za-zÀ-ÿ'´`.-]+)+$/.test(raw)) {
+    return normalizePersonName(raw);
+  }
+
+  return null;
+}
+
+async function persistLeadName(phone, providedName) {
+  if (!isMeaningfulName(providedName)) {
+    return null;
+  }
+
+  const normalizedName = normalizePersonName(providedName);
+  clientMemory.updatePersonalInfo(phone, 'name', normalizedName);
+  await leadMemory.updateLead(phone, { nome: normalizedName });
+  return normalizedName;
+}
+
+function resolveKnownName(phone, providedName, fallbackName) {
+  if (isMeaningfulName(providedName)) {
+    return normalizePersonName(providedName);
+  }
+
+  const memoryName = clientMemory.getClientMemory(phone)?.personal?.name;
+  if (isMeaningfulName(memoryName)) {
+    return normalizePersonName(memoryName);
+  }
+
+  if (isMeaningfulName(fallbackName)) {
+    return normalizePersonName(fallbackName);
+  }
+
+  return null;
+}
+
 async function saveClientContext(phone, updates) {
   const memory = clientMemory.getClientMemory(phone);
   Object.assign(memory, updates, { last_updated: new Date().toISOString() });
@@ -446,24 +515,41 @@ class NaturalSlotParser {
 class SchedulingManagerClass {
   async processScheduling(phone, name, userMessage) {
     try {
-      const intentAnalysis = SchedulingIntentionAnalyzer.analyzeMessage(userMessage);
       const clientContext = getClientContext(phone);
       const pendingScheduling = clientContext.pendingScheduling || {};
+      const providedName = extractProvidedName(userMessage, pendingScheduling.step === 'waiting_full_name');
+      if (providedName) {
+        await persistLeadName(phone, providedName);
+      }
+
+      const resolvedName = resolveKnownName(phone, providedName, name);
+      const intentAnalysis = SchedulingIntentionAnalyzer.analyzeMessage(userMessage);
+
+      if (pendingScheduling.step === 'waiting_full_name') {
+        if (!providedName) {
+          return {
+            success: false,
+            message: 'Antes de confirmar, preciso do seu *nome completo* para registrar o agendamento. Pode me informar, por favor?',
+          };
+        }
+
+        return this.confirmAndCreateEvent(phone, resolveKnownName(phone, providedName, name), pendingScheduling.requestedSlot, true);
+      }
 
       if (!intentAnalysis.hasIntent && pendingScheduling.step !== 'waiting_slot_selection') {
-        return { success: false, message: MESSAGE_TEMPLATES.askDateTime(name), intent: null };
+        return { success: false, message: MESSAGE_TEMPLATES.askDateTime(resolvedName || 'tudo bem'), intent: null };
       }
 
       switch (intentAnalysis.type) {
         case 'confirmation':
-          return this.handleConfirmation(phone, name, pendingScheduling);
+          return this.handleConfirmation(phone, resolvedName || 'cliente', pendingScheduling);
         case 'cancellation':
-          return this.handleCancellation(phone, name, pendingScheduling);
+          return this.handleCancellation(phone, resolvedName || 'cliente', pendingScheduling);
         case 'rescheduling':
-          return this.handleRescheduling(phone, name, pendingScheduling);
+          return this.handleRescheduling(phone, resolvedName || 'cliente', pendingScheduling);
         case 'scheduling':
         default:
-          return this.handleScheduling(phone, name, userMessage, pendingScheduling);
+          return this.handleScheduling(phone, resolvedName, userMessage, pendingScheduling);
       }
     } catch (error) {
       console.error('❌ [SchedulingManager] Erro ao processar agendamento:', error);
@@ -694,8 +780,23 @@ class SchedulingManagerClass {
     };
   }
 
-  async confirmAndCreateEvent(phone, name, slot) {
+  async confirmAndCreateEvent(phone, name, slot, skipNameCheck = false) {
     try {
+      if (!skipNameCheck && !isMeaningfulName(name)) {
+        await saveClientContext(phone, {
+          pendingScheduling: {
+            requestedSlot: slot,
+            step: 'waiting_full_name',
+            lastRequestTime: new Date().toISOString(),
+          },
+        });
+
+        return {
+          success: false,
+          message: 'Perfeito! Antes de confirmar seu horário, preciso do seu *nome completo* para registrar o agendamento. Pode me informar, por favor?',
+        };
+      }
+
       const eventResult = await calendar.scheduleEvent({
         summary: `Avaliação Capilar: ${name}`,
         description: `Cliente: ${name}\nTelefone: ${phone}\nAgendado automaticamente via Sofia IA`,

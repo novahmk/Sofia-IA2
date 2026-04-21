@@ -26,6 +26,7 @@ let kpiTracker = null;
 let auditLogger = null;
 let knowledgeBase = null;
 let intentFlow = null;
+const agentContext = require('./agents/agentContext');
 const supervisor = require('./agents/supervisor');
 const leadMemory = require('./leadSystem/leadMemory');
 const eventBus = require('./eventBus');
@@ -33,6 +34,7 @@ const followUpManager = require('./leadSystem/followUpManager');
 const selfImprovement = require('./improvement/selfImprovement');
 const messageQueue = require('./messageQueue');
 const responseCache = require('./responseCache');
+const { SchedulingIntentionAnalyzer } = require('./agents/scheduling-system');
 const { jaFoiProcessada, marcarComoProcessada, salvarMensagem } = require('./conversationDB');
 const { carregarHistorico, injetarContextoFrio } = require('./conversationDB');
 const leadDB = require('./leadDB');
@@ -487,9 +489,31 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
     const result = await messageQueue.enqueue(from, async () => {
       // Verificar cache antes de chamar a IA
       const lead = await leadDB.buscarOuCriarLead(from).catch(() => ({ status: 'novo', score: 0 }));
+      const intention = agentContext.analyzeIntention(textoLimpo, lead);
+      const schedulingIntent = SchedulingIntentionAnalyzer.analyzeMessage(textoLimpo);
+      const memory = clientMemory?.getClientMemory ? clientMemory.getClientMemory(from) : null;
+      const hasSchedulingInProgress = Boolean(memory?.pendingScheduling?.step || memory?.activeScheduling?.eventId);
+      const shouldUseSchedulingFlow =
+        hasSchedulingInProgress ||
+        (schedulingIntent.hasIntent && ['scheduling', 'confirmation', 'cancellation', 'rescheduling'].includes(schedulingIntent.type)) ||
+        (intention.agent === 'administrative' && ['scheduling', 'reschedule', 'schedule_confirmation', 'schedule_cancellation'].includes(intention.type));
 
       // Cancelar follow-up pendente pois o lead respondeu
       await leadDB.cancelarFollowUpPendente(from).catch(() => {});
+
+      if (shouldUseSchedulingFlow) {
+        console.log(`📅 [${reqId}] Intenção de agendamento detectada — usando supervisor diretamente`);
+        const routedName = lead?.nome || (pushName && pushName !== 'Cliente' ? pushName : 'Cliente');
+        const r = await supervisor.processMessage(from, textoLimpo, routedName);
+
+        await leadDB.atualizarLead(from, {
+          nome: r.lead?.nome,
+          intencao: intention.type,
+          status: r.lead?.status || lead?.status,
+        }).catch(() => {});
+
+        return { response: r.response, _fromSupervisor: true, _bypassedSdr: true };
+      }
 
       const etapa = lead?.status || lead?.etapa_funil || 'novo';
       const cached = await responseCache.get(textoLimpo, etapa);
