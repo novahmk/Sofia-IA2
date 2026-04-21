@@ -28,6 +28,7 @@ let knowledgeBase = null;
 let intentFlow = null;
 const supervisor = require('./agents/supervisor');
 const leadMemory = require('./leadSystem/leadMemory');
+const eventBus = require('./eventBus');
 const followUpManager = require('./leadSystem/followUpManager');
 const selfImprovement = require('./improvement/selfImprovement');
 
@@ -175,6 +176,9 @@ app.get('/webhook', (req, res) => {
   res.status(200).json({ status: 'ok', webhook: 'active' });
 });
 
+// ── FASE 2: Dashboard API (SSE + REST) ──
+app.use('/api', require('./dashboardApi'));
+
 // ── POST /webhook — Processamento principal ──
 app.post('/webhook', async (req, res) => {
   const reqId = Date.now().toString(36);
@@ -306,6 +310,8 @@ app.post('/webhook', async (req, res) => {
     console.log(`🤖 [${reqId}] Supervisor processando...`);
     // Feedback loop: informa a mensagem atual para fechar o ciclo da msg anterior
     selfImprovement.feedNextMessage(from, textoLimpo);
+    // Publica evento de mensagem recebida para o dashboard
+    eventBus.publish('message_received', { phone: from, nome: pushName, message: textoLimpo.substring(0, 80) });
     const startAI = Date.now();
     const result = await supervisor.processMessage(
       from,
