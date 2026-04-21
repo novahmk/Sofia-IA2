@@ -33,6 +33,7 @@ const followUpManager = require('./leadSystem/followUpManager');
 const selfImprovement = require('./improvement/selfImprovement');
 const messageQueue = require('./messageQueue');
 const responseCache = require('./responseCache');
+const { jaFoiProcessada, marcarComoProcessada, salvarMensagem } = require('./conversationDB');
 
 try {
   const ai = require('./ai');
@@ -265,6 +266,7 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
     let audioUrl = null;
     let audioMessage = null;  // objeto completo para descriptografia via API
     let webhookSessionId = null;
+    let messageId = null;     // ID único da mensagem para deduplicação
 
     // Formato WASenderAPI (messages.received ou sem event)
     if (req.body.data?.messages) {
@@ -274,6 +276,7 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
       texto = msg.messageBody || msg.message?.conversation || msg.message?.extendedTextMessage?.text;
       pushName = msg.pushName || req.body.data.pushName || pushName;
       webhookSessionId = req.body.sessionId || null;
+      messageId = key.id || null;
       // Detectar áudio (audioMessage = gravação, pttMessage = push-to-talk)
       if (msg.message?.audioMessage || msg.message?.pttMessage) {
         const isPtt = !!msg.message.pttMessage;
@@ -281,6 +284,14 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
         audioMessage._messageKey = key;
         audioMessage._type = isPtt ? 'ptt' : 'audio';  // para montar payload correto
         audioUrl = audioMessage.url || null;
+      }
+      // Fallback de mídia não suportada (sticker, location, contact, etc.)
+      if (!texto && !audioMessage) {
+        const msgTypes = Object.keys(msg.message || {}).filter(k => !['messageContextInfo', 'deviceSentMessage'].includes(k));
+        if (msgTypes.length > 0) {
+          console.log(`📎 [${reqId}] Mídia não suportada: ${msgTypes.join(', ')}`);
+          // from ainda pode não ter barra: vamos marcar para responder depois
+        }
       }
       if (key.fromMe === true) {
         console.log(`🔄 [${reqId}] fromMe, ignorando`);
@@ -317,7 +328,13 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
       .trim();
     if (from && !from.startsWith('+')) from = '+' + from;
 
-    // Sem texto: tentar transcrever áudio ou pedir para digitar
+    // ── Deduplicação: ignorar mensagens que já foram processadas ──
+    if (messageId && await jaFoiProcessada(messageId)) {
+      console.log(`⏭️ [${reqId}] Mensagem duplicada (${messageId}), ignorando`);
+      return;
+    }
+
+    // Sem texto: tentar transcrever áudio ou responder fallback de mídia
     if (!texto?.trim()) {
       if (audioUrl) {
         if (process.env.OPENAI_API_KEY) {
@@ -344,7 +361,12 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
           return;
         }
       } else {
-        console.warn(`⚠️ [${reqId}] Sem texto nem áudio. Body: ${JSON.stringify(req.body).substring(0, 500)}`);
+        // Fallback: sticker, location, contact, documento, imagem sem legenda
+        if (from) {
+          await enviarMensagem(from, 'Recebi sua mensagem! Por enquanto só consigo processar textos e áudios. Pode me escrever o que precisa? 😊');
+        } else {
+          console.warn(`⚠️ [${reqId}] Sem texto nem áudio. Body: ${JSON.stringify(req.body).substring(0, 500)}`);
+        }
         return;
       }
     }
@@ -385,6 +407,12 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
 
     // STEP 4: Gerar resposta via fila serial por telefone (evita concorrência)
     console.log(`🤖 [${reqId}] Enfileirando para ${from}...`);
+
+    // Marcar como processada antes de entrar na fila (previne retransmissões concorrentes)
+    await marcarComoProcessada(messageId);
+    // Persistir mensagem do usuário no histórico PostgreSQL
+    await salvarMensagem(from, 'user', textoLimpo, audioUrl ? 'audio' : 'text');
+
     selfImprovement.feedNextMessage(from, textoLimpo);
     eventBus.publish('message_received', { phone: from, nome: pushName, message: textoLimpo.substring(0, 80) });
 
@@ -418,6 +446,9 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
     }
 
     console.log(`💬 [${reqId}] Resposta: "${respostaIA.substring(0, 150)}"`);
+
+    // Persistir resposta da IA no histórico PostgreSQL
+    await salvarMensagem(from, 'assistant', respostaIA, 'text');
 
     // Tracking
     if (kpiTracker) { try { kpiTracker.recordResponse(Date.now() - startAI); } catch (e) {} }

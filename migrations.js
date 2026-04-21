@@ -92,6 +92,12 @@ async function runMigrations() {
                 created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
 
+            -- Deduplicação de mensagens WhatsApp (evita reprocessar retransmissões)
+            CREATE TABLE IF NOT EXISTS mensagens_processadas (
+                message_id    TEXT PRIMARY KEY,
+                processado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
             -- FASE 1: Playbooks de respostas bem-sucedidas (Self-Improvement)
             CREATE TABLE IF NOT EXISTS agent_interactions (
                 id              SERIAL PRIMARY KEY,
@@ -120,6 +126,7 @@ async function runMigrations() {
             CREATE INDEX IF NOT EXISTS idx_consents_phone      ON consents(phone);
             CREATE INDEX IF NOT EXISTS idx_conversations_phone ON conversations(phone);
             CREATE INDEX IF NOT EXISTS idx_conversations_time  ON conversations(created_at);
+            CREATE INDEX IF NOT EXISTS idx_msg_proc_em         ON mensagens_processadas(processado_em);
             CREATE INDEX IF NOT EXISTS idx_leads_updated_at    ON leads(updated_at);
             CREATE INDEX IF NOT EXISTS idx_agent_interactions_phone  ON agent_interactions(phone);
             CREATE INDEX IF NOT EXISTS idx_agent_interactions_agent  ON agent_interactions(agent_used);

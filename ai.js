@@ -7,6 +7,7 @@ const clientMemory = require('./clientMemory');
 const selfHealing = require('./utils/selfHealing');
 const abTesting = require('./abTesting');
 const db = require('./database');
+const { injetarContextoFrio } = require('./conversationDB');
 
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
@@ -295,11 +296,14 @@ async function getSofiaResponse(userId, userMessage, audioContext = null) {
     const abPatch = abTesting.getPromptPatch(userId);
     const effectivePrompt = abPatch ? systemPrompt + '\n' + abPatch : systemPrompt;
 
+    // ===== CONTEXTO FRIO — detectar gap > COLD_CONTEXT_HOURS ===== 
+    const coldPrompt = await injetarContextoFrio(effectivePrompt, userId);
+
     // Inicializa o histórico se não existir
     if (!chatHistories[userId]) {
         console.log(`📝 Iniciando novo histórico para ${userId} [A/B: ${abVariant}]`);
         chatHistories[userId] = [
-            { role: "system", content: effectivePrompt }
+            { role: "system", content: coldPrompt }
         ];
 
         // Bug 2 — Hidratação: restaura histórico do banco após restart no Railway
@@ -314,6 +318,10 @@ async function getSofiaResponse(userId, userMessage, audioContext = null) {
         } catch (e) {
             console.warn(`⚠️ Hidratação falhou para ${userId}: ${e.message}`);
         }
+    } else if (coldPrompt !== effectivePrompt) {
+        // Sessão já existe mas retomou após gap longo — atualizar system message
+        chatHistories[userId][0] = { role: "system", content: coldPrompt };
+        console.log(`🥶 [ai.js] Contexto frio injetado para ${userId}`);
     }
 
     // ===== MEMÓRIA DO CLIENTE (compacta) =====
