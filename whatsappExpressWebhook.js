@@ -173,7 +173,22 @@ function checkIpRateLimit(ip) {
 
 // ── Rotas ──
 app.get('/', (req, res) => res.json({ status: 'ok' }));
-app.get('/health', (req, res) => res.json({ status: 'ok', time: Date.now() }));
+app.get('/health', (req, res) => {
+  const { chatHistoriesAdapter, customerIntentsAdapter } = require('./redisStateAdapter');
+  res.json({
+    status: 'ok',
+    time: Date.now(),
+    uptime: Math.floor(process.uptime()),
+    nodeEnv: process.env.NODE_ENV || 'development',
+    ai: getSofiaResponse ? 'full' : 'fallback',
+    openai: !!process.env.OPENAI_API_KEY,
+    wasenderapi: !!process.env.WASENDERAPI_TOKEN,
+    database: !!process.env.DATABASE_URL,
+    redis: !!process.env.REDIS_URL,
+    queue: require('./messageQueue').getStats(),
+    cache: require('./responseCache').getStats(),
+  });
+});
 
 app.get('/dashboard', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
