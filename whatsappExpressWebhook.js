@@ -315,9 +315,9 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
           try {
             console.log(`🎙️ [${reqId}] Áudio de ${from} — transcrevendo via Whisper...`);
             const { transcribeAudioFromUrl } = require('./audioProcessor');
+            // URL já vem descriptografada pela WASenderAPI — sem necesidade de auth
             const transcription = await transcribeAudioFromUrl(
-              audioUrl, from, '/tmp/sofia_audio',
-              { 'Authorization': `Bearer ${WASENDERAPI_TOKEN}` }
+              audioUrl, from, '/tmp/sofia_audio'
             );
             texto = transcription.text;
             console.log(`✅ [${reqId}] Transcrição (${transcription.language}): "${texto.substring(0, 80)}"`);
