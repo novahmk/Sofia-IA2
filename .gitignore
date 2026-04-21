@@ -27,6 +27,8 @@ temp_audio/
 
 # Credenciais Google
 google-credentials.json
+google-oauth-token.json
+serviceAccountKey.json
 
 # Auth do WhatsApp (legado)
 .wwebjs_auth/

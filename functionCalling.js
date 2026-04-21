@@ -8,6 +8,7 @@ const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
 const feegow = require('./feegow');
+const calendarService = require('./calendar');
 
 const db = require('./database');
 const CLIENTS_DATA_FILE = path.join(__dirname, 'clients_data.json');
@@ -64,6 +65,159 @@ class FunctionCalling {
      */
     getToolSchemas() {
         return [
+            {
+                type: 'function',
+                function: {
+                    name: 'list_calendar_events',
+                    description: 'Lista eventos do Google Calendar em um período específico.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            start_date: {
+                                type: 'string',
+                                description: 'Data inicial do período. Aceita DD/MM, DD/MM/YYYY ou YYYY-MM-DD.'
+                            },
+                            end_date: {
+                                type: 'string',
+                                description: 'Data final do período. Aceita DD/MM, DD/MM/YYYY ou YYYY-MM-DD.'
+                            }
+                        },
+                        required: ['start_date', 'end_date']
+                    }
+                }
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'check_calendar_availability',
+                    description: 'Verifica se um horário está livre no Google Calendar. Use apenas quando data e horário estiverem claros.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            date: {
+                                type: 'string',
+                                description: 'Data do horário a verificar. Aceita DD/MM, DD/MM/YYYY ou YYYY-MM-DD.'
+                            },
+                            time: {
+                                type: 'string',
+                                description: 'Horário inicial no formato HH:MM.'
+                            },
+                            duration_minutes: {
+                                type: 'integer',
+                                description: 'Duração do intervalo em minutos. Padrão: 60.'
+                            },
+                            end_time: {
+                                type: 'string',
+                                description: 'Horário final opcional no formato HH:MM. Se enviado, substitui a duração.'
+                            }
+                        },
+                        required: ['date', 'time']
+                    }
+                }
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'create_calendar_event',
+                    description: 'Cria um novo evento no Google Calendar. Só use depois que o usuário confirmar explicitamente os detalhes.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            title: {
+                                type: 'string',
+                                description: 'Título ou assunto do evento.'
+                            },
+                            description: {
+                                type: 'string',
+                                description: 'Descrição do evento.'
+                            },
+                            date: {
+                                type: 'string',
+                                description: 'Data do evento. Aceita DD/MM, DD/MM/YYYY ou YYYY-MM-DD.'
+                            },
+                            time: {
+                                type: 'string',
+                                description: 'Horário inicial do evento no formato HH:MM.'
+                            },
+                            duration_minutes: {
+                                type: 'integer',
+                                description: 'Duração em minutos. Use quando o usuário informar a duração.'
+                            },
+                            end_time: {
+                                type: 'string',
+                                description: 'Horário final opcional no formato HH:MM.'
+                            },
+                            confirmed: {
+                                type: 'boolean',
+                                description: 'Só deve ser true quando o usuário confirmou explicitamente os detalhes finais.'
+                            }
+                        },
+                        required: ['title', 'date', 'time', 'confirmed']
+                    }
+                }
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'update_calendar_event',
+                    description: 'Edita um evento existente no Google Calendar.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            event_id: {
+                                type: 'string',
+                                description: 'ID do evento no Google Calendar.'
+                            },
+                            title: {
+                                type: 'string',
+                                description: 'Novo título do evento.'
+                            },
+                            description: {
+                                type: 'string',
+                                description: 'Nova descrição do evento.'
+                            },
+                            date: {
+                                type: 'string',
+                                description: 'Nova data do evento. Aceita DD/MM, DD/MM/YYYY ou YYYY-MM-DD.'
+                            },
+                            time: {
+                                type: 'string',
+                                description: 'Novo horário inicial no formato HH:MM.'
+                            },
+                            duration_minutes: {
+                                type: 'integer',
+                                description: 'Nova duração em minutos.'
+                            },
+                            end_time: {
+                                type: 'string',
+                                description: 'Novo horário final opcional no formato HH:MM.'
+                            }
+                        },
+                        required: ['event_id']
+                    }
+                }
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'delete_calendar_event',
+                    description: 'Deleta um evento do Google Calendar. Só use depois que o usuário confirmar explicitamente a exclusão.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            event_id: {
+                                type: 'string',
+                                description: 'ID do evento no Google Calendar.'
+                            },
+                            confirmed: {
+                                type: 'boolean',
+                                description: 'Só deve ser true quando o usuário confirmou explicitamente a exclusão.'
+                            }
+                        },
+                        required: ['event_id', 'confirmed']
+                    }
+                }
+            },
             {
                 type: 'function',
                 function: {
@@ -290,6 +444,21 @@ class FunctionCalling {
         console.log(`🔧 Executando função: ${functionName}`, args);
 
         switch (functionName) {
+            case 'list_calendar_events':
+                return this.listCalendarEvents(args.start_date, args.end_date);
+
+            case 'check_calendar_availability':
+                return this.checkCalendarAvailability(args.date, args.time, args.duration_minutes, args.end_time);
+
+            case 'create_calendar_event':
+                return this.createCalendarEvent(args);
+
+            case 'update_calendar_event':
+                return this.updateCalendarEvent(args);
+
+            case 'delete_calendar_event':
+                return this.deleteCalendarEvent(args.event_id, args.confirmed);
+
             case 'check_available_appointments':
                 return this.checkAvailableAppointments(args.procedure_name, args.date, args.preferred_time);
 
@@ -341,6 +510,79 @@ class FunctionCalling {
         if (!name) return 1; // default: mesoterapia
         const lower = name.toLowerCase().trim();
         return this._procedureMap[lower] || 1;
+    }
+
+    async listCalendarEvents(startDate, endDate) {
+        return calendarService.listEvents(startDate, endDate);
+    }
+
+    async checkCalendarAvailability(date, time, durationMinutes = 60, endTime = null) {
+        return calendarService.checkAvailability(date, time, durationMinutes, endTime);
+    }
+
+    async createCalendarEvent({ title, description = '', date, time, duration_minutes: durationMinutes = 60, end_time: endTime = null, confirmed = false }) {
+        if (!confirmed) {
+            return { error: 'Criação não executada: o usuário ainda não confirmou os detalhes do evento.' };
+        }
+
+        const result = await calendarService.createEvent({
+            title,
+            description,
+            date,
+            time,
+            durationMinutes,
+            endTime,
+        });
+
+        if (result.error) {
+            return result;
+        }
+
+        return {
+            success: true,
+            message: 'Evento criado com sucesso.',
+            event: result.event,
+        };
+    }
+
+    async updateCalendarEvent({ event_id: eventId, title, description, date, time, duration_minutes: durationMinutes, end_time: endTime = null }) {
+        const result = await calendarService.updateEvent({
+            eventId,
+            title,
+            description,
+            date,
+            time,
+            durationMinutes,
+            endTime,
+        });
+
+        if (result.error) {
+            return result;
+        }
+
+        return {
+            success: true,
+            message: 'Evento atualizado com sucesso.',
+            event: result.event,
+        };
+    }
+
+    async deleteCalendarEvent(eventId, confirmed = false) {
+        if (!confirmed) {
+            return { error: 'Exclusão não executada: o usuário ainda não confirmou a remoção do evento.' };
+        }
+
+        const result = await calendarService.deleteEvent(eventId);
+
+        if (result.error) {
+            return result;
+        }
+
+        return {
+            success: true,
+            message: `Evento ${eventId} removido com sucesso.`,
+            event_id: eventId,
+        };
     }
 
     /**

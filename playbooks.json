@@ -1,0 +1,16 @@
+{
+  "price_objection": [
+    {
+      "id": "8b238606-dbae-4e6e-a12f-ab18f96b0091",
+      "pattern": "qual o preço",
+      "normalizedPattern": "qual o preco",
+      "intentionType": "price_objection",
+      "response": "Ótimo investimento!",
+      "successRate": 0.9,
+      "usageCount": 2,
+      "successCount": 1,
+      "createdAt": "2026-04-21T00:18:11.141Z",
+      "lastUsedAt": "2026-04-21T00:18:11.163Z"
+    }
+  ]
+}

@@ -37,6 +37,7 @@ const { jaFoiProcessada, marcarComoProcessada, salvarMensagem } = require('./con
 const { carregarHistorico, injetarContextoFrio } = require('./conversationDB');
 const leadDB = require('./leadDB');
 const { chamarIA } = require('./sdrAI');
+const calendarService = require('./calendar');
 
 try {
   const ai = require('./ai');
@@ -211,6 +212,67 @@ h1{margin-top:0} .ok{color:green} .fail{color:red}</style></head><body><div clas
 
 app.get('/webhook', (req, res) => {
   res.status(200).json({ status: 'ok', webhook: 'active' });
+});
+
+app.get('/auth/google/login', async (req, res) => {
+  try {
+    const authStatus = await calendarService.getAuthStatus();
+    if (authStatus.mode === 'service-account') {
+      return res.status(200).json({
+        mode: authStatus.mode,
+        connected: authStatus.connected,
+        message: 'Google Calendar configurado com conta de serviço. Login OAuth não é necessário.',
+        calendar_id: authStatus.calendar_id,
+        service_account_file: authStatus.service_account_file,
+      });
+    }
+
+    const state = typeof req.query.state === 'string' ? req.query.state : '';
+    const authUrl = calendarService.getGoogleAuthUrl(state);
+    return res.redirect(authUrl);
+  } catch (error) {
+    console.error('❌ OAuth login Google falhou:', error.message);
+    return res.status(500).json({
+      error: error.message,
+      required_env: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],
+    });
+  }
+});
+
+app.get('/auth/google/callback', async (req, res) => {
+  const frontendUrl = calendarService.getFrontendUrl();
+
+  try {
+    const authStatus = await calendarService.getAuthStatus();
+    if (authStatus.mode === 'service-account') {
+      return res.redirect(`${frontendUrl}/?google_auth=not_required`);
+    }
+  } catch (error) {
+    console.error('❌ Status do Google Calendar falhou:', error.message);
+  }
+
+  if (req.query.error) {
+    const errorMessage = String(req.query.error);
+    return res.redirect(`${frontendUrl}/?google_auth=error&reason=${encodeURIComponent(errorMessage)}`);
+  }
+
+  try {
+    const code = typeof req.query.code === 'string' ? req.query.code : '';
+    await calendarService.handleOAuthCallback(code);
+    return res.redirect(`${frontendUrl}/?google_auth=success`);
+  } catch (error) {
+    console.error('❌ OAuth callback Google falhou:', error.message);
+    return res.redirect(`${frontendUrl}/?google_auth=error&reason=${encodeURIComponent(error.message)}`);
+  }
+});
+
+app.get('/auth/google/status', async (req, res) => {
+  try {
+    const status = await calendarService.getAuthStatus();
+    return res.status(200).json(status);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
 });
 
 // ── FASE 2: Dashboard API (SSE + REST) ──
