@@ -232,12 +232,15 @@ async function transcribeAudioViaWASender({ audioMessage, phoneNumber, sessionId
         signal: AbortSignal.timeout(20000),
     });
 
+    console.log(`🔓 Status decrypt-media: ${decryptResp.status}`);
+    const decryptRaw = await decryptResp.text();
+    console.log(`🔓 Resposta decrypt-media: ${decryptRaw.substring(0, 500)}`);
+
     if (!decryptResp.ok) {
-        const errText = await decryptResp.text().catch(() => '');
-        throw new Error(`WASenderAPI /decrypt-media HTTP ${decryptResp.status}: ${errText.substring(0, 200)}`);
+        throw new Error(`WASenderAPI /decrypt-media HTTP ${decryptResp.status}: ${decryptRaw.substring(0, 200)}`);
     }
 
-    const decryptData = await decryptResp.json();
+    const decryptData = JSON.parse(decryptRaw);
     const publicUrl = decryptData?.publicUrl || decryptData?.data?.publicUrl || decryptData?.url;
 
     if (!publicUrl) {
