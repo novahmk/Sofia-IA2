@@ -91,6 +91,22 @@ async function runMigrations() {
                 media_type  TEXT DEFAULT 'text',
                 created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
+
+            -- FASE 1: Playbooks de respostas bem-sucedidas (Self-Improvement)
+            CREATE TABLE IF NOT EXISTS agent_interactions (
+                id              SERIAL PRIMARY KEY,
+                phone           TEXT NOT NULL,
+                agent_used      TEXT NOT NULL,
+                intention_type  TEXT NOT NULL,
+                user_message    TEXT NOT NULL,
+                sofia_response  TEXT NOT NULL,
+                success         BOOLEAN,
+                confidence      NUMERIC(4,3),
+                signals         JSONB DEFAULT '[]'::jsonb,
+                latency_ms      INTEGER,
+                lead_stage      TEXT,
+                created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
         `);
 
         console.log('✅ Tabelas criadas\n');
@@ -105,6 +121,9 @@ async function runMigrations() {
             CREATE INDEX IF NOT EXISTS idx_conversations_phone ON conversations(phone);
             CREATE INDEX IF NOT EXISTS idx_conversations_time  ON conversations(created_at);
             CREATE INDEX IF NOT EXISTS idx_leads_updated_at    ON leads(updated_at);
+            CREATE INDEX IF NOT EXISTS idx_agent_interactions_phone  ON agent_interactions(phone);
+            CREATE INDEX IF NOT EXISTS idx_agent_interactions_agent  ON agent_interactions(agent_used);
+            CREATE INDEX IF NOT EXISTS idx_agent_interactions_time   ON agent_interactions(created_at);
         `);
 
         console.log('✅ Índices criados\n');

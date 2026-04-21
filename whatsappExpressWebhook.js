@@ -26,9 +26,10 @@ let kpiTracker = null;
 let auditLogger = null;
 let knowledgeBase = null;
 let intentFlow = null;
-const commercialFlow = require('./leadSystem/commercialFlow');
+const supervisor = require('./agents/supervisor');
 const leadMemory = require('./leadSystem/leadMemory');
 const followUpManager = require('./leadSystem/followUpManager');
+const selfImprovement = require('./improvement/selfImprovement');
 
 try {
   const ai = require('./ai');
@@ -301,16 +302,18 @@ app.post('/webhook', async (req, res) => {
       } catch (e) { /* blacklist não essencial */ }
     }
 
-    // STEP 4: Gerar resposta
-    console.log(`🧠 [${reqId}] Gerando resposta...`);
+    // STEP 4: Gerar resposta via Supervisor Multi-Agent
+    console.log(`🤖 [${reqId}] Supervisor processando...`);
+    // Feedback loop: informa a mensagem atual para fechar o ciclo da msg anterior
+    selfImprovement.feedNextMessage(from, textoLimpo);
     const startAI = Date.now();
-    const result = await commercialFlow.processMessage(
+    const result = await supervisor.processMessage(
       from,
       textoLimpo,
       pushName || 'Cliente'
     );
     const respostaIA = result.response;
-    console.log(`✅ [${reqId}] commercialFlow em ${Date.now() - startAI}ms`);
+    console.log(`✅ [${reqId}] supervisor em ${Date.now() - startAI}ms`);
 
     if (!respostaIA) {
       console.error(`❌ [${reqId}] Resposta vazia`);
