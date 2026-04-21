@@ -1,0 +1,705 @@
+'use strict';
+
+const calendar = require('../calendar');
+const leadMemory = require('../leadSystem/leadMemory');
+const clientMemory = require('../clientMemory');
+const messageQueue = require('../messageQueue');
+const cron = require('node-cron');
+
+const BUSINESS_CONFIG = {
+  timezone: 'America/Sao_Paulo',
+  openTime: '08:00',
+  closeTime: '18:00',
+  slotDuration: 60,
+  minSlots: 3,
+  daysAhead: 15,
+  excludeDays: [0, 6],
+  bufferMinutes: 30,
+};
+
+const MESSAGE_TEMPLATES = {
+  askDateTime: (name) => `Ótimo, ${name}! 😊
+
+Para agendar sua avaliação capilar, preciso de algumas informações:
+
+1️⃣ Qual dia você prefere? (próximas duas semanas)
+2️⃣ Que horário combina melhor? (comercial: 8h-18h)
+
+Ou posso sugerir horários disponíveis para você! 📅
+Qual prefere?`,
+
+  showAvailable: (slots) => {
+    const formatNatural = (slot) => {
+      const date = new Date(slot.start);
+      return date.toLocaleString('pt-BR', {
+        weekday: 'long',
+        day: '2-digit',
+        month: 'long',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    };
+
+    if (slots.length === 2) {
+      return `Encontrei dois horários disponíveis! 📅\n\n*${formatNatural(slots[0])}* ou *${formatNatural(slots[1])}*\n\nQual prefere? 😊`;
+    }
+
+    const opcoes = slots.slice(0, 3).map((slot) => `• *${formatNatural(slot)}*`).join('\n');
+    return `Encontrei esses horários disponíveis para você! 📅\n\n${opcoes}\n\nQual combina melhor? Pode me dizer o dia ou a hora que preferir 😊`;
+  },
+
+  confirmSchedule: (name, dateTime) => {
+    const date = new Date(dateTime);
+    const formatted = date.toLocaleString('pt-BR', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    return `✅ *Agendamento Confirmado!*\n\n👤 *Cliente:* ${name}\n📅 *Data/Hora:* ${formatted}\n📍 *Local:* Quality Hair Studio\n\nVocê receberá um lembrete 24h antes! 🔔\n\nAlgo mais que posso ajudá-lo?`;
+  },
+
+  reminder: (name, dateTime) => {
+    const date = new Date(dateTime);
+    const formatted = date.toLocaleString('pt-BR', {
+      weekday: 'long',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    return `🔔 *LEMBRETE DE AGENDAMENTO*\n\nOlá ${name}! 👋\n\nNão esqueça da sua avaliação capilar amanhã às ${formatted}!\n\nConfirme sua presença respondendo com: *Confirmo* ✅\n\nPrecisa reagendar? Responda: *Cancelar* ou *Remarcar*`;
+  },
+
+  cancellationConfirm: (name) => `Entendo, ${name}! 😊\n\nSeu agendamento foi cancelado com sucesso. ✅\n\nVocê pode reagendar a qualquer momento. Basta me chamar novamente! 📅\n\nAlgo mais em que possa ajudá-lo?`,
+
+  rescheduling: (name) => `Claro, ${name}! Sem problema! 😊\n\nVou buscar horários disponíveis novamente...\n\nQue dia/hora combina melhor com você agora?`,
+
+  needConfirmation: (name, dateTime) => {
+    const date = new Date(dateTime);
+    const formatted = date.toLocaleString('pt-BR', {
+      weekday: 'long',
+      day: '2-digit',
+      month: 'long',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    return `Perfeito, ${name}! 🎉\n\nReservei *${formatted}* para você.\n\nConfirmo o agendamento? 😊`;
+  },
+};
+
+function normalizeMessage(message) {
+  return String(message || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function getClientContext(phone) {
+  return clientMemory.getClientMemory(phone) || {};
+}
+
+async function saveClientContext(phone, updates) {
+  const memory = clientMemory.getClientMemory(phone);
+  Object.assign(memory, updates, { last_updated: new Date().toISOString() });
+  await clientMemory.saveMemories();
+  return memory;
+}
+
+class SchedulingIntentionAnalyzer {
+  static analyzeMessage(message) {
+    const msg = normalizeMessage(message);
+
+    const schedulingKeywords = [
+      'agendar', 'marcar', 'agenda', 'marca', 'horario', 'hora', 'quando', 'qual dia',
+      'disponivel', 'disponibilidade', 'consulta', 'avaliacao', 'sessao',
+      'gostaria de', 'gostaria', 'queria', 'quero agendar',
+    ];
+
+    const cancellationKeywords = [
+      'cancelar', 'cancelo', 'nao vou', 'desmarcar', 'desmarca', 'tirar',
+      'nao posso', 'nao consegui', 'impossivel', 'desistir', 'desisto',
+    ];
+
+    const reschedulingKeywords = [
+      'remarcar', 'reagendar', 'agendar outro', 'mudar horario', 'trocar horario',
+      'outro dia', 'outro horario',
+    ];
+
+    const confirmationKeywords = [
+      'confirmo', 'confirma', 'confirmado', 'aceito', 'ok', 'sim', 'tudo bem',
+      'perfeito', 'pode ser', 'combinado', 'certo',
+    ];
+
+    const typeMap = [
+      { keywords: cancellationKeywords, type: 'cancellation' },
+      { keywords: reschedulingKeywords, type: 'rescheduling' },
+      { keywords: confirmationKeywords, type: 'confirmation' },
+      { keywords: schedulingKeywords, type: 'scheduling' },
+    ];
+
+    let maxMatches = 0;
+    let detectedType = null;
+
+    for (const { keywords, type } of typeMap) {
+      const matches = keywords.filter((kw) => msg.includes(kw)).length;
+      if (matches > maxMatches) {
+        maxMatches = matches;
+        detectedType = type;
+      }
+    }
+
+    const hasIntent = maxMatches > 0;
+    return {
+      hasIntent,
+      type: detectedType,
+      confidence: hasIntent ? Math.min(maxMatches * 20, 100) : 0,
+      matches: maxMatches,
+    };
+  }
+
+  static extractDateTime(message) {
+    const msg = normalizeMessage(message);
+    const timePattern = /(\d{1,2})(?::([0-5]\d))?\s*(h|horas?)?/;
+    const timeMatch = msg.match(timePattern);
+
+    let suggestedTime = null;
+    if (timeMatch) {
+      const hour = Number(timeMatch[1]);
+      const minute = timeMatch[2] ? Number(timeMatch[2]) : 0;
+      if (hour >= 8 && hour <= 18) {
+        suggestedTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+      }
+    }
+
+    const dayPatterns = {
+      'segunda': 1,
+      'segunda-feira': 1,
+      'terca': 2,
+      'terca-feira': 2,
+      'terça': 2,
+      'terça-feira': 2,
+      'quarta': 3,
+      'quarta-feira': 3,
+      'quinta': 4,
+      'quinta-feira': 4,
+      'sexta': 5,
+      'sexta-feira': 5,
+      'amanha': 1,
+      'semana que vem': 7,
+      'proxima semana': 7,
+      'próxima semana': 7,
+    };
+
+    let suggestedDate = null;
+    for (const [pattern, offset] of Object.entries(dayPatterns)) {
+      if (msg.includes(pattern)) {
+        const date = new Date();
+        if (pattern === 'amanha') {
+          date.setDate(date.getDate() + 1);
+        } else if (offset === 7) {
+          date.setDate(date.getDate() + 7);
+        } else {
+          const currentDay = date.getDay();
+          let delta = offset - currentDay;
+          if (delta <= 0) delta += 7;
+          date.setDate(date.getDate() + delta);
+        }
+        suggestedDate = date.toISOString().split('T')[0];
+        break;
+      }
+    }
+
+    return {
+      suggestedDate,
+      suggestedTime,
+      confidence: (suggestedDate ? 50 : 0) + (suggestedTime ? 50 : 0),
+    };
+  }
+}
+
+class BusinessHoursManager {
+  static isBusinessHour(date) {
+    const localDate = new Date(date);
+    const day = localDate.getDay();
+    if (BUSINESS_CONFIG.excludeDays.includes(day)) return false;
+
+    const [openHour, openMin] = BUSINESS_CONFIG.openTime.split(':').map(Number);
+    const [closeHour, closeMin] = BUSINESS_CONFIG.closeTime.split(':').map(Number);
+    const dateMinutes = localDate.getHours() * 60 + localDate.getMinutes();
+    const openMinutes = openHour * 60 + openMin;
+    const closeMinutes = closeHour * 60 + closeMin;
+
+    return dateMinutes >= openMinutes && dateMinutes < closeMinutes;
+  }
+
+  static formatSlot(date) {
+    return date.toLocaleString('pt-BR', {
+      weekday: 'short',
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  static async getAvailableSlots(count = BUSINESS_CONFIG.minSlots) {
+    const slots = [];
+    const cursor = new Date();
+    const [openHour] = BUSINESS_CONFIG.openTime.split(':').map(Number);
+    const [closeHour, closeMinute] = BUSINESS_CONFIG.closeTime.split(':').map(Number);
+    const deadline = new Date();
+    deadline.setDate(deadline.getDate() + BUSINESS_CONFIG.daysAhead);
+
+    if (cursor.getHours() < openHour) {
+      cursor.setHours(openHour, 0, 0, 0);
+    } else {
+      const minutes = cursor.getMinutes();
+      const roundedMinutes = minutes === 0 ? 0 : Math.ceil(minutes / 30) * 30;
+      cursor.setMinutes(roundedMinutes, 0, 0);
+      if (roundedMinutes >= 60) {
+        cursor.setHours(cursor.getHours() + 1, 0, 0, 0);
+      }
+    }
+
+    if (cursor.getHours() > closeHour || (cursor.getHours() === closeHour && cursor.getMinutes() >= closeMinute)) {
+      cursor.setDate(cursor.getDate() + 1);
+      cursor.setHours(openHour, 0, 0, 0);
+    }
+
+    while (slots.length < count && cursor <= deadline) {
+      if (BUSINESS_CONFIG.excludeDays.includes(cursor.getDay())) {
+        cursor.setDate(cursor.getDate() + 1);
+        cursor.setHours(openHour, 0, 0, 0);
+        continue;
+      }
+
+      if (!this.isBusinessHour(cursor)) {
+        cursor.setDate(cursor.getDate() + 1);
+        cursor.setHours(openHour, 0, 0, 0);
+        continue;
+      }
+
+      const nextSlot = new Date(cursor.getTime() + BUSINESS_CONFIG.slotDuration * 60000);
+      const isAvailable = await calendar.isTimeAvailable(cursor, nextSlot);
+
+      if (isAvailable) {
+        slots.push({
+          start: cursor.toISOString(),
+          end: nextSlot.toISOString(),
+          label: this.formatSlot(cursor),
+        });
+      }
+
+      cursor.setMinutes(cursor.getMinutes() + BUSINESS_CONFIG.slotDuration + BUSINESS_CONFIG.bufferMinutes);
+
+      const [closeHour] = BUSINESS_CONFIG.closeTime.split(':').map(Number);
+      if (cursor.getHours() >= closeHour) {
+        cursor.setDate(cursor.getDate() + 1);
+        cursor.setHours(openHour, 0, 0, 0);
+      }
+    }
+
+    return slots;
+  }
+
+  static async findRequestedSlot(suggestedDate, suggestedTime) {
+    if (!suggestedDate || !suggestedTime) {
+      return null;
+    }
+
+    const candidateStart = new Date(`${suggestedDate}T${suggestedTime}:00`);
+    if (!this.isBusinessHour(candidateStart)) {
+      return null;
+    }
+
+    const candidateEnd = new Date(candidateStart.getTime() + BUSINESS_CONFIG.slotDuration * 60000);
+    const isAvailable = await calendar.isTimeAvailable(candidateStart, candidateEnd);
+    if (!isAvailable) {
+      return null;
+    }
+
+    return {
+      start: candidateStart.toISOString(),
+      end: candidateEnd.toISOString(),
+      label: this.formatSlot(candidateStart),
+    };
+  }
+}
+
+class NaturalSlotParser {
+  static parse(message, slots) {
+    if (!slots || slots.length === 0) return null;
+    const msg = normalizeMessage(message);
+    const hasTerm = (term) => new RegExp(`(^|\\s)${term}(\\s|$)`).test(msg);
+
+    const ordinals = [
+      ['primeiro', 'primeira', '1o', '1a', 'um', 'uma', '1'],
+      ['segundo', 'segunda', '2o', '2a', 'dois', 'duas', '2'],
+      ['terceiro', 'terceira', '3o', '3a', 'tres', '3'],
+      ['ultimo', 'ultima', 'por ultimo'],
+    ];
+
+    for (let i = 0; i < ordinals.length; i += 1) {
+      const idx = i === ordinals.length - 1 ? slots.length - 1 : i;
+      if (ordinals[i].some((term) => hasTerm(term)) && idx < slots.length) {
+        return idx;
+      }
+    }
+
+    const timeRegex = /(\d{1,2})(?:h|:)(\d{0,2})?/g;
+    let timeMatch = timeRegex.exec(msg);
+    while (timeMatch !== null) {
+      const hour = Number(timeMatch[1]);
+      const minute = timeMatch[2] ? Number(timeMatch[2]) : 0;
+      const matchIndex = slots.findIndex((slot) => {
+        const slotDate = new Date(slot.start);
+        return slotDate.getHours() === hour && (!timeMatch[2] || slotDate.getMinutes() === minute);
+      });
+      if (matchIndex !== -1) return matchIndex;
+      timeMatch = timeRegex.exec(msg);
+    }
+
+    const weekdays = {
+      'segunda': 1,
+      'terca': 2,
+      'terça': 2,
+      'quarta': 3,
+      'quinta': 4,
+      'sexta': 5,
+      'sabado': 6,
+      'domingo': 0,
+      'amanha': null,
+    };
+
+    for (const [term, dayNum] of Object.entries(weekdays)) {
+      if (!msg.includes(term)) continue;
+      if (term === 'amanha') {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const idx = slots.findIndex((slot) => new Date(slot.start).toDateString() === tomorrow.toDateString());
+        if (idx !== -1) return idx;
+      } else {
+        const idx = slots.findIndex((slot) => new Date(slot.start).getDay() === dayNum);
+        if (idx !== -1) return idx;
+      }
+    }
+
+    if (msg.includes('manha') || msg.includes('cedo')) {
+      const idx = slots.findIndex((slot) => new Date(slot.start).getHours() < 12);
+      if (idx !== -1) return idx;
+    }
+    if (msg.includes('tarde')) {
+      const idx = slots.findIndex((slot) => {
+        const hour = new Date(slot.start).getHours();
+        return hour >= 12 && hour < 18;
+      });
+      if (idx !== -1) return idx;
+    }
+    if (msg.includes('mais tarde') || msg.includes('mais para o fim')) {
+      return slots.length - 1;
+    }
+
+    const positives = ['pode ser', 'ta bom', 'tudo bem', 'serve', 'combinado', 'beleza', 'fechado', 'ok'];
+    if (positives.some((term) => msg.includes(term))) return 0;
+
+    return null;
+  }
+
+  static clarify(slots) {
+    const options = slots.slice(0, 3).map((slot) => {
+      const date = new Date(slot.start);
+      return `*${date.toLocaleString('pt-BR', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}*`;
+    }).join(' ou ');
+
+    return `Desculpe, não entendi bem qual horário você preferiu 😅\n\nPode me dizer: ${options}?`;
+  }
+}
+
+class SchedulingManagerClass {
+  async processScheduling(phone, name, userMessage) {
+    try {
+      const intentAnalysis = SchedulingIntentionAnalyzer.analyzeMessage(userMessage);
+      const clientContext = getClientContext(phone);
+      const pendingScheduling = clientContext.pendingScheduling || {};
+
+      if (!intentAnalysis.hasIntent && pendingScheduling.step !== 'waiting_slot_selection') {
+        return { success: false, message: MESSAGE_TEMPLATES.askDateTime(name), intent: null };
+      }
+
+      switch (intentAnalysis.type) {
+        case 'confirmation':
+          return this.handleConfirmation(phone, name, pendingScheduling);
+        case 'cancellation':
+          return this.handleCancellation(phone, name, pendingScheduling);
+        case 'rescheduling':
+          return this.handleRescheduling(phone, name, pendingScheduling);
+        case 'scheduling':
+        default:
+          return this.handleScheduling(phone, name, userMessage, pendingScheduling);
+      }
+    } catch (error) {
+      console.error('❌ [SchedulingManager] Erro ao processar agendamento:', error);
+      return {
+        success: false,
+        message: 'Desculpe, houve um erro ao processar seu agendamento. Tente novamente em alguns instantes.',
+        error: error.message,
+      };
+    }
+  }
+
+  async handleScheduling(phone, name, message, pendingScheduling) {
+    const extraction = SchedulingIntentionAnalyzer.extractDateTime(message);
+
+    if (extraction.suggestedDate && extraction.suggestedTime) {
+      const requestedSlot = await BusinessHoursManager.findRequestedSlot(
+        extraction.suggestedDate,
+        extraction.suggestedTime,
+      );
+
+      if (requestedSlot) {
+        return this.confirmAndCreateEvent(phone, name, requestedSlot);
+      }
+    }
+
+    if (pendingScheduling.step === 'waiting_slot_selection' && pendingScheduling.availableSlots) {
+      const slotIndex = NaturalSlotParser.parse(message, pendingScheduling.availableSlots);
+      if (slotIndex === null) {
+        return {
+          success: false,
+          message: NaturalSlotParser.clarify(pendingScheduling.availableSlots),
+          availableSlots: pendingScheduling.availableSlots,
+        };
+      }
+      return this.confirmAndCreateEvent(phone, name, pendingScheduling.availableSlots[slotIndex]);
+    }
+
+    const availableSlots = await BusinessHoursManager.getAvailableSlots();
+    const filteredSlots = availableSlots.filter((slot) => {
+      const slotDate = new Date(slot.start);
+      let matches = true;
+      if (extraction.suggestedDate) {
+        matches = matches && slotDate.toISOString().split('T')[0] === extraction.suggestedDate;
+      }
+      if (extraction.suggestedTime) {
+        const [hour, minute] = extraction.suggestedTime.split(':').map(Number);
+        matches = matches && slotDate.getHours() === hour && slotDate.getMinutes() === minute;
+      }
+      return matches;
+    });
+
+    if ((extraction.suggestedDate || extraction.suggestedTime) && filteredSlots.length > 0) {
+      return this.confirmAndCreateEvent(phone, name, filteredSlots[0]);
+    }
+
+    await saveClientContext(phone, {
+      pendingScheduling: {
+        ...pendingScheduling,
+        availableSlots,
+        lastRequestTime: new Date().toISOString(),
+        step: 'waiting_slot_selection',
+      },
+    });
+
+    return {
+      success: false,
+      message: MESSAGE_TEMPLATES.showAvailable(availableSlots),
+      availableSlots,
+    };
+  }
+
+  async handleConfirmation(phone, name, pendingScheduling) {
+    if (!pendingScheduling.eventId) {
+      return {
+        success: false,
+        message: 'Você não tem nenhum agendamento pendente para confirmar. Deseja agendar agora?',
+      };
+    }
+
+    await leadMemory.updateLead(phone, {
+      status_agendamento: 'confirmado',
+      data_confirmacao: new Date().toISOString(),
+      agendado: true,
+    });
+
+    await saveClientContext(phone, { pendingScheduling: null });
+
+    return {
+      success: true,
+      message: MESSAGE_TEMPLATES.confirmSchedule(name, pendingScheduling.selectedDateTime),
+      schedulingData: {
+        eventId: pendingScheduling.eventId,
+        status: 'confirmado',
+      },
+    };
+  }
+
+  async handleCancellation(phone, name, pendingScheduling) {
+    if (!pendingScheduling.eventId) {
+      return {
+        success: false,
+        message: 'Você não tem nenhum agendamento para cancelar.',
+      };
+    }
+
+    const cancelled = await calendar.cancelEvent(pendingScheduling.eventId);
+    if (!cancelled) {
+      return {
+        success: false,
+        message: 'Desculpe, houve um problema ao cancelar. Tente novamente.',
+      };
+    }
+
+    await leadMemory.updateLead(phone, {
+      status_agendamento: 'cancelado',
+      data_cancelamento: new Date().toISOString(),
+    });
+
+    const memory = clientMemory.getClientMemory(phone);
+    memory.appointments.cancelled.push({
+      eventId: pendingScheduling.eventId,
+      cancelled_at: new Date().toISOString(),
+      previousDateTime: pendingScheduling.selectedDateTime,
+    });
+    await saveClientContext(phone, { pendingScheduling: null });
+
+    return {
+      success: true,
+      message: MESSAGE_TEMPLATES.cancellationConfirm(name),
+      action: 'cancelled',
+    };
+  }
+
+  async handleRescheduling(phone, name, pendingScheduling) {
+    if (pendingScheduling.eventId) {
+      await calendar.cancelEvent(pendingScheduling.eventId);
+    }
+
+    const availableSlots = await BusinessHoursManager.getAvailableSlots();
+    await saveClientContext(phone, {
+      pendingScheduling: {
+        step: 'waiting_slot_selection',
+        lastRequestTime: new Date().toISOString(),
+        availableSlots,
+      },
+    });
+
+    return {
+      success: false,
+      message: `${MESSAGE_TEMPLATES.rescheduling(name)}\n\n${MESSAGE_TEMPLATES.showAvailable(availableSlots)}`,
+      availableSlots,
+    };
+  }
+
+  async confirmAndCreateEvent(phone, name, slot) {
+    try {
+      const eventResult = await calendar.scheduleEvent({
+        summary: `Avaliação Capilar: ${name}`,
+        description: `Cliente: ${name}\nTelefone: ${phone}\nAgendado automaticamente via Sofia IA`,
+        startTime: slot.start,
+        endTime: slot.end,
+        attendees: [process.env.NOTIFICATION_EMAIL || 'admin@quality.com'],
+      });
+
+      if (!eventResult.success) {
+        throw new Error(eventResult.error || 'Falha ao criar evento no calendário');
+      }
+
+      clientMemory.recordAppointment(phone, {
+        eventId: eventResult.eventId,
+        dateTime: slot.start,
+        source: 'sofia-scheduling-agent',
+        status: 'pending_confirmation',
+      });
+
+      await saveClientContext(phone, {
+        pendingScheduling: {
+          eventId: eventResult.eventId,
+          selectedDateTime: slot.start,
+          step: 'pending_confirmation',
+        },
+      });
+
+      await leadMemory.updateLead(phone, {
+        status_agendamento: 'pendente_confirmacao',
+        data_agendamento: new Date(slot.start).toISOString(),
+        hora_agendada: slot.start,
+      });
+
+      return {
+        success: true,
+        message: MESSAGE_TEMPLATES.needConfirmation(name, slot.start),
+        schedulingData: {
+          eventId: eventResult.eventId,
+          dateTime: slot.start,
+          status: 'pending_confirmation',
+        },
+      };
+    } catch (error) {
+      console.error('❌ Erro ao confirmar agendamento:', error);
+      return {
+        success: false,
+        message: 'Desculpe, houve um erro ao confirmar seu agendamento. Tente novamente.',
+        error: error.message,
+      };
+    }
+  }
+}
+
+class SchedulingReminders {
+  static initializeReminders() {
+    if (this.initialized) return;
+    this.initialized = true;
+
+    cron.schedule('0 10 * * *', async () => {
+      console.log('🔔 [Reminders] Verificando agendamentos para lembrete...');
+      await this.sendReminders();
+    }, { timezone: BUSINESS_CONFIG.timezone });
+
+    console.log('✅ [Reminders] Agendador de lembretes inicializado');
+  }
+
+  static async sendReminders() {
+    try {
+      const allClients = clientMemory.listAllClients();
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrowDate = tomorrow.toISOString().split('T')[0];
+
+      for (const client of allClients) {
+        const memory = clientMemory.getClientMemory(client.phone);
+        const appointments = memory.appointments?.scheduled || [];
+        const upcoming = appointments.filter((appointment) => {
+          if (!appointment.dateTime) return false;
+          return String(appointment.dateTime).startsWith(tomorrowDate);
+        });
+
+        for (const appointment of upcoming) {
+          await messageQueue.enqueue(client.phone, async () => {
+            console.log(`🔔 [Reminders] Lembrete pronto para ${client.phone}: ${appointment.dateTime}`);
+            return MESSAGE_TEMPLATES.reminder(client.name || memory.personal?.name || 'cliente', appointment.dateTime);
+          });
+        }
+      }
+
+      console.log('✅ [Reminders] Varredura de lembretes concluída');
+    } catch (error) {
+      console.error('❌ [Reminders] Erro ao enviar lembretes:', error);
+    }
+  }
+}
+
+const SchedulingManager = new SchedulingManagerClass();
+
+module.exports = {
+  SchedulingIntentionAnalyzer,
+  BusinessHoursManager,
+  NaturalSlotParser,
+  SchedulingManager,
+  SchedulingReminders,
+  MESSAGE_TEMPLATES,
+  BUSINESS_CONFIG,
+};

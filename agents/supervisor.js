@@ -22,6 +22,7 @@ const agentContext = require('./agentContext');
 const agentCommercial = require('./agentCommercial');
 const agentTechnical = require('./agentTechnical');
 const agentAdministrative = require('./agentAdministrative');
+const agentScheduling = require('./agentScheduling');
 const selfImprovement = require('../improvement/selfImprovement');
 const eventBus = require('../eventBus');
 
@@ -100,7 +101,11 @@ class SupervisorAgent {
           response = await agentTechnical.respond(phone, userMessage, lead, intention);
           break;
         case 'administrative':
-          response = await agentAdministrative.respond(phone, userMessage, lead, intention);
+          if (['scheduling', 'reschedule', 'schedule_confirmation', 'schedule_cancellation'].includes(intention.type)) {
+            response = await agentScheduling.respond(phone, userMessage, lead, intention);
+          } else {
+            response = await agentAdministrative.respond(phone, userMessage, lead, intention);
+          }
           break;
         default:
           response = await agentContext.respond(phone, userMessage, lead, intention);

@@ -8,6 +8,8 @@
 
 'use strict';
 
+const clientMemory = require('../clientMemory');
+
 // Mapeamentos de palavras-chave para tipo de intenção + agente responsável
 const INTENT_MAP = [
   // Objeções comerciais
@@ -58,8 +60,18 @@ const INTENT_MAP = [
     agent: 'administrative',
   },
   {
+    keywords: ['confirmo', 'confirmado', 'aceito', 'pode ser', 'combinado', 'fechado'],
+    type: 'schedule_confirmation',
+    agent: 'administrative',
+  },
+  {
     keywords: ['cancelar', 'remarcar', 'desmarcar', 'mudar horário', 'adiar'],
     type: 'reschedule',
+    agent: 'administrative',
+  },
+  {
+    keywords: ['não vou', 'desisto', 'cancelo', 'cancelamento'],
+    type: 'schedule_cancellation',
     agent: 'administrative',
   },
   {
@@ -78,6 +90,25 @@ class AgentContext {
    */
   analyzeIntention(userMessage, lead) {
     const msg = userMessage.toLowerCase().trim();
+    const phone = lead?.telefone || lead?.lead_id;
+    const memory = phone ? clientMemory.getClientMemory(phone) : null;
+    const pendingScheduling = memory?.pendingScheduling;
+
+    if (pendingScheduling?.step === 'waiting_slot_selection') {
+      return { type: 'scheduling', agent: 'administrative', entities: {} };
+    }
+
+    if (pendingScheduling?.step === 'pending_confirmation') {
+      if (['cancelar', 'desmarcar', 'remarcar', 'adiar'].some((k) => msg.includes(k))) {
+        return { type: 'reschedule', agent: 'administrative', entities: {} };
+      }
+
+      if (['confirmo', 'confirmado', 'aceito', 'pode ser', 'combinado', 'fechado', 'ok'].some((k) => msg.includes(k))) {
+        return { type: 'schedule_confirmation', agent: 'administrative', entities: {} };
+      }
+
+      return { type: 'scheduling', agent: 'administrative', entities: {} };
+    }
 
     for (const pattern of INTENT_MAP) {
       if (pattern.keywords.some((k) => msg.includes(k))) {
