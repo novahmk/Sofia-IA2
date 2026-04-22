@@ -68,7 +68,7 @@ class SupervisorAgent {
    * @param {string} name
    * @returns {Promise<{ response: string, lead: object }>}
    */
-  async processMessage(phone, userMessage, name = 'Cliente') {
+  async processMessage(phone, userMessage, name = 'Cliente', precomputedIntention = null) {
     const start = Date.now();
 
     // 1. Carrega/cria lead
@@ -85,9 +85,9 @@ class SupervisorAgent {
     }
 
     // 4. Análise de intenção (síncrona, sem custo de API)
-    const intention = agentContext.analyzeIntention(userMessage, lead);
+    const intention = precomputedIntention || await agentContext.analyzeIntentionWithAI(userMessage, lead);
     console.log(
-      `🎯 [Supervisor] Agente: ${intention.agent} | Intenção: ${intention.type}`
+      `🎯 [Supervisor] Agente: ${intention.agent} | Intenção: ${intention.type}${intention.source ? ` | Fonte: ${intention.source}` : ''}`
     );
 
     // 5. Roteia para agente especializado

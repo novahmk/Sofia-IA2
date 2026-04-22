@@ -223,7 +223,7 @@ class SchedulingIntentionAnalyzer {
     ];
 
     const confirmationKeywords = [
-      'confirmo', 'confirma', 'confirmado', 'aceito', 'ok', 'sim', 'tudo bem',
+      'confirmar', 'confirmacao', 'confirmo', 'confirma', 'confirmado', 'aceito', 'ok', 'sim', 'tudo bem',
       'perfeito', 'pode ser', 'combinado', 'certo',
     ];
 

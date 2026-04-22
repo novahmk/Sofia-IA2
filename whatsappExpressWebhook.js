@@ -489,7 +489,7 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
     const result = await messageQueue.enqueue(from, async () => {
       // Verificar cache antes de chamar a IA
       const lead = await leadDB.buscarOuCriarLead(from).catch(() => ({ status: 'novo', score: 0 }));
-      const intention = agentContext.analyzeIntention(textoLimpo, lead);
+      const intention = await agentContext.analyzeIntentionWithAI(textoLimpo, lead);
       const schedulingIntent = SchedulingIntentionAnalyzer.analyzeMessage(textoLimpo);
       const memory = clientMemory?.getClientMemory ? clientMemory.getClientMemory(from) : null;
       const hasSchedulingInProgress = Boolean(memory?.pendingScheduling?.step || memory?.activeScheduling?.eventId);
@@ -504,7 +504,7 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
       if (shouldUseSchedulingFlow) {
         console.log(`📅 [${reqId}] Intenção de agendamento detectada — usando supervisor diretamente`);
         const routedName = lead?.nome || (pushName && pushName !== 'Cliente' ? pushName : 'Cliente');
-        const r = await supervisor.processMessage(from, textoLimpo, routedName);
+        const r = await supervisor.processMessage(from, textoLimpo, routedName, intention);
 
         await leadDB.atualizarLead(from, {
           nome: r.lead?.nome,

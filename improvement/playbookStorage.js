@@ -17,6 +17,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const FILE_PATH = path.join(__dirname, '..', 'playbooks.json');
+const DYNAMIC_INTENTIONS = new Set(['scheduling', 'schedule_confirmation', 'reschedule']);
 
 // Limiar mínimo de similaridade para reutilizar um playbook
 const SIMILARITY_THRESHOLD = 0.60;
@@ -83,6 +84,7 @@ class PlaybookStorage {
    */
   save({ pattern, response, intentionType, successRate }) {
     if (!pattern || !response || !intentionType) return;
+    if (this._shouldSkipPlaybook(response, intentionType)) return;
 
     const normalizedPattern = this._normalize(pattern);
 
@@ -170,6 +172,14 @@ class PlaybookStorage {
         console.warn(`⚠️ PlaybookStorage: falha ao salvar: ${e.message}`);
       }
     }, 5000);
+  }
+
+  _shouldSkipPlaybook(response, intentionType) {
+    if (DYNAMIC_INTENTIONS.has(intentionType)) {
+      return true;
+    }
+
+    return /reservei \*|\bcliente:\b|\bdata\/hora:\b/i.test(response || '');
   }
 
   // ── Helpers ───────────────────────────────────────────────
