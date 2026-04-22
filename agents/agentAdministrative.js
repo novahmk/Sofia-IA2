@@ -2,8 +2,7 @@
  * AGENTE ADMINISTRATIVO — Agendamento e dados do cliente
  * ══════════════════════════════════════════════════════════
  * - Especializado em agendamentos, cancelamentos, remarcações
- * - Delega para getSofiaResponse com foco em usar as tool calls do Feegow
- *   (check_available_appointments e book_appointment já estão no functionCalling.js)
+ * - Delega para getSofiaResponse com foco nas tool calls do Google Calendar
  */
 
 'use strict';
@@ -13,11 +12,11 @@ const ADMIN_CONTEXTS = {
     '[AGENTE ADMINISTRATIVO — AGENDAMENTO]',
     'Modo operacional: assistente de agendamento',
     'Regras:',
-    '1. Use check_available_appointments para buscar horários reais ANTES de sugerir qualquer data',
-    '2. Apresente 3-5 opções de horário de forma clara e numerada',
-    '3. Quando cliente confirmar data+horário, use book_appointment',
-    '4. Dados necessários para agendar: nome completo, data, horário, procedimento',
-    '5. Confirme cada dado com o cliente antes de executar o agendamento',
+    '1. Use check_calendar_availability apenas quando data e horário estiverem claros',
+    '2. Quando cliente confirmar data+horário, use create_calendar_event',
+    '3. Dados necessários para agendar: nome completo, data e horário',
+    '4. Confirme cada dado com o cliente antes de executar o agendamento',
+    '5. Não use ferramentas ou fluxos legados de agendamento',
     '[FIM DO CONTEXTO ADMINISTRATIVO]',
   ].join('\n'),
 
@@ -26,9 +25,9 @@ const ADMIN_CONTEXTS = {
     'Modo operacional: assistente de remarcação',
     'Regras:',
     '1. Confirme qual agendamento o cliente quer alterar (data/horário atual)',
-    '2. Se remarcação: use check_available_appointments para novos horários',
+    '2. Se remarcação: confirme a nova data/horário e use update_calendar_event',
     '3. Seja compreensiva — não questione o motivo do cancelamento',
-    '4. Se cancelamento: confirme e ofereça reagendar futuramente',
+    '4. Se cancelamento: confirme e use delete_calendar_event',
     '[FIM DO CONTEXTO ADMINISTRATIVO]',
   ].join('\n'),
 
@@ -66,6 +65,7 @@ class AgentAdministrative {
       '[CONTEXTO DO LEAD]',
       `Nome: ${lead.nome}`,
       `Etapa do funil: ${lead.etapa_funil}`,
+      lead.horasSemContato ? `Retomada após ${lead.horasSemContato}h sem contato` : '',
       historico ? `\nHistórico:\n${historico}` : '',
       '[FIM DO CONTEXTO]',
       adminCtx,

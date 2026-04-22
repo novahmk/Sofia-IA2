@@ -1,13 +1,12 @@
 /**
  * Function Calling System
  * Define funções que Sofia pode chamar para buscar dados reais
- * Integrado com Feegow API para agendamentos
+ * Integrado com Google Calendar para agendamentos
  */
 
 const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
-const feegow = require('./feegow');
 const calendarService = require('./calendar');
 
 const db = require('./database');
@@ -221,139 +220,6 @@ class FunctionCalling {
             {
                 type: 'function',
                 function: {
-                    name: 'check_available_appointments',
-                    description: 'Verifica horários disponíveis para um procedimento nos próximos dias via Feegow. Procedimentos: MESOTERAPIA (id=1), PRP (id=2), LIMPEZA DE PELE (id=3), BOTOX (id=8), TRANSPLANTE CAPILAR (id=9)',
-                    parameters: {
-                        type: 'object',
-                        properties: {
-                            procedure_name: {
-                                type: 'string',
-                                description: 'Nome do procedimento (ex: mesoterapia, prp, botox, transplante, limpeza de pele). Se não souber, use "mesoterapia"'
-                            },
-                            date: {
-                                type: 'string',
-                                description: 'Data específica no formato DD/MM/YYYY. Opcional — se não informado, busca os próximos 7 dias.'
-                            },
-                            preferred_time: {
-                                type: 'string',
-                                description: 'Horário preferido (ex: 14:00, 10:30). Opcional.'
-                            }
-                        },
-                        required: []
-                    }
-                }
-            },
-            {
-                type: 'function',
-                function: {
-                    name: 'book_appointment',
-                    description: 'Agenda uma consulta/procedimento no Feegow. REQUER: nome, telefone, data e horário confirmados pelo cliente.',
-                    parameters: {
-                        type: 'object',
-                        properties: {
-                            phone: {
-                                type: 'string',
-                                description: 'Número de telefone do cliente (ex: 5511999999999)'
-                            },
-                            name: {
-                                type: 'string',
-                                description: 'Nome completo do cliente'
-                            },
-                            date: {
-                                type: 'string',
-                                description: 'Data da consulta (DD/MM/YYYY)'
-                            },
-                            time: {
-                                type: 'string',
-                                description: 'Horário da consulta (HH:MM)'
-                            },
-                            procedure_name: {
-                                type: 'string',
-                                description: 'Nome do procedimento (mesoterapia, prp, botox, etc). Padrão: mesoterapia'
-                            }
-                        },
-                        required: ['phone', 'name', 'date', 'time']
-                    }
-                }
-            },
-            {
-                type: 'function',
-                function: {
-                    name: 'search_appointments',
-                    description: 'Busca agendamentos existentes de um paciente no Feegow',
-                    parameters: {
-                        type: 'object',
-                        properties: {
-                            paciente_id: {
-                                type: 'number',
-                                description: 'ID do paciente no Feegow'
-                            },
-                            data_start: {
-                                type: 'string',
-                                description: 'Data início (DD/MM/YYYY)'
-                            },
-                            data_end: {
-                                type: 'string',
-                                description: 'Data fim (DD/MM/YYYY)'
-                            }
-                        },
-                        required: []
-                    }
-                }
-            },
-            {
-                type: 'function',
-                function: {
-                    name: 'cancel_appointment',
-                    description: 'Cancela um agendamento existente no Feegow',
-                    parameters: {
-                        type: 'object',
-                        properties: {
-                            agendamento_id: {
-                                type: 'number',
-                                description: 'ID do agendamento a cancelar'
-                            },
-                            motivo: {
-                                type: 'string',
-                                description: 'Motivo do cancelamento'
-                            }
-                        },
-                        required: ['agendamento_id']
-                    }
-                }
-            },
-            {
-                type: 'function',
-                function: {
-                    name: 'reschedule_appointment',
-                    description: 'Remarca um agendamento para nova data/horário no Feegow',
-                    parameters: {
-                        type: 'object',
-                        properties: {
-                            agendamento_id: {
-                                type: 'number',
-                                description: 'ID do agendamento a remarcar'
-                            },
-                            new_date: {
-                                type: 'string',
-                                description: 'Nova data (DD/MM/YYYY)'
-                            },
-                            new_time: {
-                                type: 'string',
-                                description: 'Novo horário (HH:MM)'
-                            },
-                            motivo: {
-                                type: 'string',
-                                description: 'Motivo da remarcação'
-                            }
-                        },
-                        required: ['agendamento_id', 'new_date', 'new_time']
-                    }
-                }
-            },
-            {
-                type: 'function',
-                function: {
                     name: 'list_procedures',
                     description: 'Lista todos os procedimentos disponíveis na clínica com preços e duração',
                     parameters: {
@@ -459,21 +325,6 @@ class FunctionCalling {
             case 'delete_calendar_event':
                 return this.deleteCalendarEvent(args.event_id, args.confirmed);
 
-            case 'check_available_appointments':
-                return this.checkAvailableAppointments(args.procedure_name, args.date, args.preferred_time);
-
-            case 'book_appointment':
-                return this.bookAppointment(args.phone, args.name, args.date, args.time, args.procedure_name);
-
-            case 'search_appointments':
-                return this.searchAppointments(args.paciente_id, args.data_start, args.data_end);
-
-            case 'cancel_appointment':
-                return this.cancelAppointment(args.agendamento_id, args.motivo);
-
-            case 'reschedule_appointment':
-                return this.rescheduleAppointment(args.agendamento_id, args.new_date, args.new_time, args.motivo);
-
             case 'list_procedures':
                 return this.listProcedures();
 
@@ -491,7 +342,7 @@ class FunctionCalling {
         }
     }
 
-    // Mapa de nomes de procedimentos para IDs do Feegow
+    // Mapa legado de nomes de procedimentos
     _procedureMap = {
         'mesoterapia': 1,
         'meso': 1,
@@ -586,231 +437,64 @@ class FunctionCalling {
     }
 
     /**
-     * Verifica horários disponíveis via Feegow API
+     * Método legado mantido apenas por compatibilidade
      */
     async checkAvailableAppointments(procedureName = 'mesoterapia', date = null, preferredTime = null) {
-        try {
-            const procedureId = this._resolveProcedureId(procedureName);
-            let dataStart, dataEnd;
-
-            if (date) {
-                // Data específica: converter DD/MM/YYYY para DD-MM-YYYY
-                dataStart = date.replace(/\//g, '-');
-                dataEnd = dataStart;
-            } else {
-                // Próximos 7 dias
-                dataStart = feegow.today();
-                dataEnd = feegow.daysFromNow(7);
-            }
-
-            console.log(`📅 Feegow: buscando slots para procedimento ${procedureId} de ${dataStart} a ${dataEnd}`);
-            const slots = await feegow.getAvailableSlots(procedureId, dataStart, dataEnd);
-
-            if (!slots || slots.length === 0) {
-                return {
-                    date: date || `${dataStart} a ${dataEnd}`,
-                    total_available: 0,
-                    available_times: [],
-                    message: 'Não encontrei horários disponíveis nesse período. Quer que eu busque em outra data?'
-                };
-            }
-
-            // Se o cliente pediu horário específico, destacar
-            let recommended = null;
-            if (preferredTime) {
-                for (const slot of slots) {
-                    if (slot.horarios.includes(preferredTime)) {
-                        recommended = { data: slot.data, horario: preferredTime, profissional_id: slot.profissional_id, local_id: slot.local_id };
-                        break;
-                    }
-                }
-            }
-
-            // Formatar para a IA mostrar de forma bonita
-            const formatted = feegow.formatAvailableSlots(slots);
-
-            console.log(`✅ Feegow: ${slots.length} dia(s) com disponibilidade`);
-
-            return {
-                date: date || `próximos 7 dias`,
-                total_available: slots.reduce((sum, s) => sum + s.horarios.length, 0),
-                days_available: slots.length,
-                slots: slots.map(s => ({ data: s.data, horarios: s.horarios, profissional_id: s.profissional_id, local_id: s.local_id })),
-                formatted,
-                recommended,
-                procedure_id: procedureId
-            };
-        } catch (error) {
-            console.error(`❌ Erro ao buscar horários no Feegow: ${error.message}`);
-            return { error: `Não consegui consultar os horários: ${error.message}` };
-        }
+        return {
+            error: 'A integração legada de agendamento foi desativada. Use Google Calendar para consultar disponibilidade e criar agendamentos.'
+        };
     }
 
     /**
-     * Agenda uma consulta via Feegow API
+     * Método legado mantido apenas por compatibilidade
      */
     async bookAppointment(phone, name, date, time, procedureName = 'mesoterapia') {
-        try {
-            const procedureId = this._resolveProcedureId(procedureName);
-            // Converter DD/MM/YYYY para DD-MM-YYYY
-            const feegowDate = date.replace(/\//g, '-');
-            const feegowTime = time.length === 5 ? `${time}:00` : time; // HH:MM -> HH:MM:SS
-
-            // Buscar slot disponível para pegar profissional_id e local_id
-            const slots = await feegow.getAvailableSlots(procedureId, feegowDate, feegowDate);
-            if (!slots || slots.length === 0) {
-                return { error: `Não há horários disponíveis em ${date}. Quer tentar outra data?` };
-            }
-
-            // Encontrar o slot com o horário pedido
-            let profissionalId = null;
-            let localId = 0;
-            const timeShort = time.substring(0, 5);
-            for (const slot of slots) {
-                if (slot.horarios.includes(timeShort)) {
-                    profissionalId = slot.profissional_id;
-                    localId = slot.local_id;
-                    break;
-                }
-            }
-
-            if (!profissionalId) {
-                return { error: `Horário ${time} não está disponível em ${date}. Horários livres: ${slots[0]?.horarios?.slice(0, 5).join(', ')}` };
-            }
-
-            // Pegar especialidade do procedimento
-            const specialties = await feegow.listSpecialties();
-            const especialidadeId = specialties.length > 0 ? specialties[0].id : 125;
-
-            console.log(`📅 Feegow: criando agendamento - prof=${profissionalId}, proc=${procedureId}, ${feegowDate} ${feegowTime}`);
-
-            const result = await feegow.createAppointment({
-                pacienteId: 0, // Feegow pode criar paciente inline
-                profissionalId,
-                especialidadeId,
-                procedimentoId: procedureId,
-                data: feegowDate,
-                horario: feegowTime,
-                localId,
-                valor: 0,
-                notas: `Agendado via Sofia WhatsApp - ${name}`,
-                celular: phone
-            });
-
-            console.log(`✅ Agendamento Feegow criado: ID ${result.agendamento_id}`);
-
-            // Salvar referência local no SQLite
-            if (db) {
-                db.insertAppointment({
-                    id: `feegow_${result.agendamento_id}`,
-                    phone,
-                    name,
-                    date,
-                    time,
-                    created_at: new Date().toISOString(),
-                    status: 'confirmed',
-                    type: procedureName || 'mesoterapia',
-                    feegow_id: result.agendamento_id
-                });
-            }
-
-            return {
-                success: true,
-                agendamento_id: result.agendamento_id,
-                message: `Agendamento confirmado para ${date} às ${time}h`,
-                confirmation: `Pronto! Agendei ${procedureName || 'sua consulta'} para ${date} às ${time}h na Quality Hair. Até lá! 💇`
-            };
-        } catch (error) {
-            console.error(`❌ Erro ao agendar no Feegow: ${error.message}`);
-            return { error: `Não consegui finalizar o agendamento: ${error.message}. Quer que eu tente novamente?` };
-        }
+        return {
+            error: 'A integração legada de agendamento foi desativada. Use create_calendar_event para confirmar agendamentos.'
+        };
     }
 
     /**
-     * Busca agendamentos existentes via Feegow
+    * Método legado mantido apenas por compatibilidade
      */
     async searchAppointments(pacienteId, dataStart, dataEnd) {
-        try {
-            const filters = {};
-            if (pacienteId) filters.pacienteId = pacienteId;
-            if (dataStart) filters.dataStart = dataStart.replace(/\//g, '-');
-            if (dataEnd) filters.dataEnd = dataEnd.replace(/\//g, '-');
-
-            if (!filters.dataStart) {
-                filters.dataStart = feegow.today();
-                filters.dataEnd = feegow.daysFromNow(30);
-            }
-
-            const appointments = await feegow.searchAppointments(filters);
-            return {
-                total: appointments.length,
-                agendamentos: appointments.map(a => ({
-                    id: a.agendamento_id,
-                    data: a.data,
-                    horario: a.horario,
-                    status_id: a.status_id,
-                    procedimento_id: a.procedimento_id,
-                    notas: a.notas
-                }))
-            };
-        } catch (error) {
-            return { error: `Erro ao buscar agendamentos: ${error.message}` };
-        }
+        return {
+            error: 'A integração legada de agendamento foi desativada. Use list_calendar_events para consultar eventos.'
+        };
     }
 
     /**
-     * Cancela agendamento via Feegow
+    * Método legado mantido apenas por compatibilidade
      */
     async cancelAppointment(agendamentoId, motivo = '') {
-        try {
-            // motivo_id=1 = Solicitado pelo paciente
-            const result = await feegow.cancelAppointment(agendamentoId, 1, motivo || 'Cancelado via WhatsApp');
-            console.log(`✅ Agendamento ${agendamentoId} cancelado no Feegow`);
-            return { success: true, message: `Agendamento #${agendamentoId} cancelado com sucesso.` };
-        } catch (error) {
-            return { error: `Erro ao cancelar: ${error.message}` };
-        }
+        return {
+            error: 'A integração legada de agendamento foi desativada. Use delete_calendar_event para cancelamentos.'
+        };
     }
 
     /**
-     * Remarca agendamento via Feegow
+    * Método legado mantido apenas por compatibilidade
      */
     async rescheduleAppointment(agendamentoId, newDate, newTime, motivo = '') {
-        try {
-            const feegowDate = newDate.replace(/\//g, '-');
-            const feegowTime = newTime.length === 5 ? `${newTime}:00` : newTime;
-            const result = await feegow.rescheduleAppointment(
-                agendamentoId,
-                feegowDate,
-                feegowTime,
-                1, // motivo_id=1 = Solicitado pelo paciente
-                motivo || 'Remarcado via WhatsApp'
-            );
-            console.log(`✅ Agendamento ${agendamentoId} remarcado para ${newDate} ${newTime}`);
-            return { success: true, message: `Agendamento remarcado para ${newDate} às ${newTime}h.` };
-        } catch (error) {
-            return { error: `Erro ao remarcar: ${error.message}` };
-        }
+        return {
+            error: 'A integração legada de agendamento foi desativada. Use update_calendar_event para remarcar.'
+        };
     }
 
     /**
-     * Lista procedimentos disponíveis via Feegow
+    * Lista procedimentos estáticos disponíveis
      */
     async listProcedures() {
-        try {
-            const procedures = await feegow.listProcedures();
-            return {
-                total: procedures.length,
-                procedimentos: procedures.map(p => ({
-                    nome: p.nome,
-                    valor: `R$ ${p.valor.toFixed(2)}`,
-                    duracao: `${p.tempo} minutos`,
-                    id: p.id
-                }))
-            };
-        } catch (error) {
-            return { error: `Erro ao listar procedimentos: ${error.message}` };
-        }
+        return {
+            total: 5,
+            procedimentos: [
+                { nome: 'Mesoterapia', valor: 'R$ 350,00', duracao: '30 minutos', id: 'mesoterapia' },
+                { nome: 'PRP', valor: 'R$ 300,00', duracao: '30 minutos', id: 'prp' },
+                { nome: 'Botox Capilar', valor: 'R$ 860,00', duracao: '60 minutos', id: 'botox' },
+                { nome: 'Limpeza de Pele', valor: 'R$ 320,00', duracao: '60 minutos', id: 'limpeza_de_pele' },
+                { nome: 'Transplante Capilar', valor: 'R$ 10000,00', duracao: '480 minutos', id: 'transplante' }
+            ]
+        };
     }
 
     /**
@@ -870,24 +554,9 @@ class FunctionCalling {
     }
 
     /**
-     * Retorna informações de preços (dados reais do Feegow + info da clínica)
+     * Retorna informações de preços estáticas da clínica
      */
     async getPricingInfo(service = null) {
-        // Tentar carregar preços reais do Feegow
-        let feegowPrices = {};
-        try {
-            const procedures = await feegow.listProcedures();
-            for (const p of procedures) {
-                feegowPrices[p.nome.toLowerCase()] = {
-                    nome: p.nome,
-                    valor: p.valor,
-                    duracao: `${p.tempo} minutos`
-                };
-            }
-        } catch (error) {
-            console.warn(`⚠️ Falha ao buscar preços Feegow: ${error.message}`);
-        }
-
         const pricing = {
             consultation: {
                 original_price: 700.00,
@@ -900,11 +569,11 @@ class FunctionCalling {
                     'Diagnóstico de calvície (Norwood)'
                 ]
             },
-            mesoterapia: feegowPrices['mesoterapia'] || { valor: 350, duracao: '30 minutos' },
-            prp: feegowPrices['prp'] || { valor: 300, duracao: '30 minutos' },
-            botox: feegowPrices['botox'] || { valor: 860, duracao: '60 minutos' },
-            limpeza_de_pele: feegowPrices['limpeza de pele'] || { valor: 320, duracao: '60 minutos' },
-            transplante: feegowPrices['transplante capilar'] || { valor: 10000, duracao: '480 minutos' }
+            mesoterapia: { valor: 350, duracao: '30 minutos' },
+            prp: { valor: 300, duracao: '30 minutos' },
+            botox: { valor: 860, duracao: '60 minutos' },
+            limpeza_de_pele: { valor: 320, duracao: '60 minutos' },
+            transplante: { valor: 10000, duracao: '480 minutos' }
         };
 
         if (service && pricing[service]) {

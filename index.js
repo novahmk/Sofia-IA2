@@ -48,7 +48,6 @@ const intentFlow = require('./intentFlow');
 const topicBlacklist = require('./topicBlacklist');
 const auditLogger = require('./utils/auditLogger');
 const abTesting = require('./abTesting');
-const feegow = require('./feegow');
 const { getDashboardData, runHealthChecks } = require('./dashboard/dashboardApi');
 const auth = require('./auth');
 const wsManager = require('./dashboard/wsManager');
@@ -1105,12 +1104,6 @@ async function start() {
         console.error('⚠️ KB:', err.message);
     });
 
-    // Feegow em background
-    if (feegow.isConfigured()) {
-        feegow.listProcedures().catch(err => {
-            console.error('⚠️ Feegow:', err.message);
-        });
-    }
 }
 
 // Exibe relatórios a cada 5 minutos

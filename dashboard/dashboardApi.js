@@ -16,7 +16,6 @@ const clientMemory = require('../clientMemory');
 const conversationManager = require('../core/conversationManager');
 const auditLogger = require('../utils/auditLogger');
 const knowledgeBase = require('../knowledgeBase');
-const feegow = require('../feegow');
 
 // =====================================================
 // CACHE DE HEALTH CHECK (evita spam de requests)
@@ -215,7 +214,6 @@ function getServicesStatus(perf) {
         sofia: { status: 'online', label: 'Sofia IA (Node.js)', latencyMs: null, lastChecked: new Date().toISOString(), detail: `Uptime: ${formatUptime(process.uptime())}` },
         openai: { status: 'unknown', label: 'OpenAI GPT-4o', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
         uazapi: { status: 'unknown', label: messagingLabel, latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
-        feegow: { status: 'unknown', label: 'Feegow Agendamentos', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
         calendar: { status: 'unknown', label: 'Google Calendar', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
         database: { status: 'unknown', label: 'Banco de Dados', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
     };
@@ -378,35 +376,6 @@ async function checkWasenderapi() {
 }
 
 /**
- * Verifica conexão REAL com o Feegow
- */
-async function checkFeegow() {
-    const token = process.env.FEEGOW_TOKEN;
-    if (!token) {
-        return { status: 'error', latencyMs: 0, detail: 'FEEGOW_TOKEN não configurado' };
-    }
-    try {
-        const result = await httpCheck({
-            hostname: 'api.feegow.com',
-            path: '/v1/api/specialties/list',
-            method: 'GET',
-            headers: { 'x-access-token': token }
-        }, 10000);
-        if (result.ok) {
-            let count = 0;
-            try { count = JSON.parse(result.body).content?.length || 0; } catch (e) {}
-            return { status: 'online', latencyMs: result.latencyMs, detail: `${count} especialidades encontradas (${result.latencyMs}ms)` };
-        }
-        if (result.statusCode === 401 || result.statusCode === 403) {
-            return { status: 'error', latencyMs: result.latencyMs, detail: 'Token inválido ou expirado' };
-        }
-        return { status: 'error', latencyMs: result.latencyMs, detail: result.detail || `Erro HTTP ${result.statusCode}` };
-    } catch (err) {
-        return { status: 'error', latencyMs: 0, detail: err.message };
-    }
-}
-
-/**
  * Verifica se Google Calendar está configurado e acessível
  */
 async function checkGoogleCalendar() {
@@ -470,10 +439,9 @@ async function runHealthChecks() {
 
     const timestamp = new Date().toISOString();
     const messagingCheck = process.env.WASENDERAPI_BASE_URL ? checkWasenderapi() : checkUazapi();
-    const [openai, messaging, feegowResult, calendar, database] = await Promise.all([
+    const [openai, messaging, calendar, database] = await Promise.all([
         checkOpenAI(),
         messagingCheck,
-        checkFeegow(),
         checkGoogleCalendar(),
         checkDatabase(),
     ]);
@@ -483,7 +451,6 @@ async function runHealthChecks() {
         sofia: { status: 'online', label: 'Sofia IA (Node.js)', latencyMs: 0, lastChecked: timestamp, detail: `Uptime: ${formatUptime(process.uptime())}` },
         openai: { ...openai, label: 'OpenAI GPT-4o', lastChecked: timestamp },
         uazapi: { ...messaging, label: messagingLabel, lastChecked: timestamp },
-        feegow: { ...feegowResult, label: 'Feegow Agendamentos', lastChecked: timestamp },
         calendar: { ...calendar, label: 'Google Calendar', lastChecked: timestamp },
         database: { ...database, label: 'Banco de Dados', lastChecked: timestamp },
     };
