@@ -127,7 +127,7 @@ Fluxo recomendado neste projeto:
 
 - Crie uma conta de serviço no Google Cloud Console
 - Baixe o JSON gerado
-- Salve o arquivo como `serviceAccountKey.json` na raiz do projeto ou defina `GOOGLE_SERVICE_ACCOUNT_FILE`
+- Salve o arquivo como `serviceAccountKey.json` na raiz do projeto, defina `GOOGLE_SERVICE_ACCOUNT_FILE` ou use `GOOGLE_SERVICE_ACCOUNT_JSON` com o JSON inline
 - Compartilhe a agenda do Google com o e-mail da conta de serviço
 - Defina `GOOGLE_CALENDAR_ID` com o ID da agenda compartilhada quando não quiser usar `primary`
 
@@ -136,6 +136,29 @@ Variáveis de ambiente aceitas para conta de serviço:
 - `GOOGLE_SERVICE_ACCOUNT_FILE` (opcional; padrão: `serviceAccountKey.json` na raiz do projeto)
 - `GOOGLE_SERVICE_ACCOUNT_JSON` (opcional; caminho do arquivo JSON ou JSON completo em string)
 - `GOOGLE_CALENDAR_ID` (opcional; padrão: `primary`)
+
+Ordem de resolução usada pelo runtime atual de [calendar.js](calendar.js):
+
+1. `GOOGLE_SERVICE_ACCOUNT_JSON` com JSON inline
+2. `GOOGLE_SERVICE_ACCOUNT_JSON` apontando para arquivo
+3. `GOOGLE_SERVICE_ACCOUNT_FILE`
+4. `serviceAccountKey.json` na raiz do projeto
+5. OAuth (`GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` + refresh token)
+
+Isso corrige o problema em produção onde o sistema ainda tentava abrir `/app/serviceAccountKey.json` mesmo quando a credencial já estava disponível por variável de ambiente.
+
+Como validar a autenticação da agenda após o deploy:
+
+- Acesse `GET /auth/google/status`
+- Confirme `mode: "service-account"` quando usar conta de serviço
+- Confirme `connected: true`
+- Confirme `serviceAccountSource: "GOOGLE_SERVICE_ACCOUNT_JSON"` quando usar JSON inline no Railway
+- Confirme que o log `ENOENT: no such file or directory, open '/app/serviceAccountKey.json'` desapareceu
+
+Smoke test local do contrato do módulo de agenda:
+
+- `npm run test:calendar-smoke`
+- Esse teste valida o fluxo interno de criar, detectar conflito, atualizar e cancelar evento sem depender de uma credencial Google real no workspace atual.
 
 As rotas abaixo continuam existindo apenas para compatibilidade e status. Quando a conta de serviço estiver ativa, não é necessário fazer login.
 

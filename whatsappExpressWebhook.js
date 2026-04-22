@@ -359,8 +359,8 @@ app.get('/auth/google/login', async (req, res) => {
         mode: authStatus.mode,
         connected: authStatus.connected,
         message: 'Google Calendar configurado com conta de serviço. Login OAuth não é necessário.',
-        calendar_id: authStatus.calendar_id,
-        service_account_file: authStatus.service_account_file,
+        calendarId: authStatus.calendarId,
+        serviceAccountFile: authStatus.serviceAccountFile,
       });
     }
 
@@ -406,6 +406,9 @@ app.get('/auth/google/callback', async (req, res) => {
 app.get('/auth/google/status', async (req, res) => {
   try {
     const status = await calendarService.getAuthStatus();
+    if (req.query.debug === '1') {
+      status.debug = await calendarService.getAuthDebugInfo();
+    }
     return res.status(200).json(status);
   } catch (error) {
     return res.status(500).json({ error: error.message });

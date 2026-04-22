@@ -62,6 +62,16 @@ MONITOR_ALERT_REPEAT_MS=3600000
 ## Observação sobre Google Calendar
 
 Se usar JSON inline no Railway, prefira `GOOGLE_SERVICE_ACCOUNT_JSON` com o conteúdo completo em uma linha.
+O runtime atual resolve as credenciais nesta ordem:
+
+1. `GOOGLE_SERVICE_ACCOUNT_JSON` com JSON inline
+2. `GOOGLE_SERVICE_ACCOUNT_JSON` apontando para arquivo
+3. `GOOGLE_SERVICE_ACCOUNT_FILE`
+4. `serviceAccountKey.json` na raiz
+5. OAuth Google
+
+Se `GOOGLE_SERVICE_ACCOUNT_JSON` estiver preenchida corretamente, o deploy não deve mais depender de `/app/serviceAccountKey.json`.
+
 Se usar delegação de domínio, mantenha também:
 
 ```env
