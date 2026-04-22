@@ -4,6 +4,8 @@
 
 Para rodar no Railway, o servidor principal agora usa `whatsappExpressWebhook.js`.
 
+Checklist operacional pronto para colar variáveis no Railway: [RAILWAY_ENV_CHECKLIST.md](RAILWAY_ENV_CHECKLIST.md)
+
 - Comando de start: `npm start`
 - Rota de webhook: `/webhook`
 - Rota de verificação: `GET /webhook?hub.mode=subscribe&hub.verify_token=...&hub.challenge=...`
