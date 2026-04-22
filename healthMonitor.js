@@ -131,9 +131,20 @@ function summarizeHealth(checks, timestamp = new Date().toISOString()) {
 }
 
 function formatStatusLabel(status) {
-  if (status === 'ok') return 'ok';
-  if (status === 'warning') return 'alerta';
-  return 'erro';
+  if (status === 'ok') return 'OK';
+  if (status === 'warning') return 'ALERTA';
+  if (status === 'degraded') return 'DEGRADADO';
+  return 'ERRO';
+}
+
+function getStatusEmoji(status) {
+  if (status === 'ok') return '🟢';
+  if (status === 'warning' || status === 'degraded') return '🟠';
+  return '🔴';
+}
+
+function formatServiceLine(label, status, detail) {
+  return `${getStatusEmoji(status)} ${label}: ${formatStatusLabel(status)}${detail ? ` - ${detail}` : ''}`;
 }
 
 function buildAlertKey(summary) {
@@ -145,6 +156,7 @@ function buildAlertKey(summary) {
 }
 
 function formatMonitorMessage(summary, kind = 'alert') {
+  const serverDetail = summary.services?.sofia?.detail || 'Processo ativo';
   const openaiDetail = summary.services?.openai?.detail || 'Sem detalhe';
   const messagingDetail = summary.services?.uazapi?.detail || 'Sem detalhe';
   const databaseDetail = summary.services?.database?.detail || 'Sem detalhe';
@@ -152,32 +164,37 @@ function formatMonitorMessage(summary, kind = 'alert') {
 
   if (kind === 'recovery') {
     return [
-      '✅ RECUPERADO: Sofia IA online',
-      `OpenAI: ${formatStatusLabel(summary.openai)}`,
-      `WhatsApp: ${formatStatusLabel(summary.messaging)}`,
-      `Hora: ${summary.timestamp}`,
+      '✅ SOFIA IA RECUPERADA',
+      `${getStatusEmoji('ok')} Status geral: OK`,
+      formatServiceLine('Servidor', summary.server, serverDetail),
+      formatServiceLine('OpenAI', summary.openai, openaiDetail),
+      formatServiceLine('WhatsApp', summary.messaging, messagingDetail),
+      `🕒 Hora: ${summary.timestamp}`,
     ].join('\n');
   }
 
   if (kind === 'ping') {
     return [
       '🩺 PING SOFIA IA',
-      `Status: ${summary.status.toUpperCase()}`,
-      `OpenAI: ${formatStatusLabel(summary.openai)} - ${openaiDetail}`,
-      `WhatsApp: ${formatStatusLabel(summary.messaging)} - ${messagingDetail}`,
-      `Banco: ${formatStatusLabel(summary.database)} - ${databaseDetail}`,
-      `Agenda: ${formatStatusLabel(summary.calendar)} - ${calendarDetail}`,
-      `Hora: ${summary.timestamp}`,
+      `${getStatusEmoji(summary.status)} Status geral: ${formatStatusLabel(summary.status)}`,
+      formatServiceLine('Servidor', summary.server, serverDetail),
+      formatServiceLine('OpenAI', summary.openai, openaiDetail),
+      formatServiceLine('WhatsApp', summary.messaging, messagingDetail),
+      formatServiceLine('Banco', summary.database, databaseDetail),
+      formatServiceLine('Agenda', summary.calendar, calendarDetail),
+      `🕒 Hora: ${summary.timestamp}`,
     ].join('\n');
   }
 
   return [
-    `🚨 ALERTA: SOFIA IA ${summary.status.toUpperCase()}`,
-    `OpenAI: ${formatStatusLabel(summary.openai)} - ${openaiDetail}`,
-    `WhatsApp: ${formatStatusLabel(summary.messaging)} - ${messagingDetail}`,
-    `Banco: ${formatStatusLabel(summary.database)} - ${databaseDetail}`,
-    `Agenda: ${formatStatusLabel(summary.calendar)} - ${calendarDetail}`,
-    `Hora: ${summary.timestamp}`,
+    '🚨 ALERTA SOFIA IA',
+    `${getStatusEmoji(summary.status)} Status geral: ${formatStatusLabel(summary.status)}`,
+    formatServiceLine('Servidor', summary.server, serverDetail),
+    formatServiceLine('OpenAI', summary.openai, openaiDetail),
+    formatServiceLine('WhatsApp', summary.messaging, messagingDetail),
+    formatServiceLine('Banco', summary.database, databaseDetail),
+    formatServiceLine('Agenda', summary.calendar, calendarDetail),
+    `🕒 Hora: ${summary.timestamp}`,
   ].join('\n');
 }
 
