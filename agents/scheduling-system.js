@@ -1,10 +1,13 @@
 'use strict';
 
+const { OpenAI } = require('openai');
 const calendar = require('../calendar');
 const leadMemory = require('../leadSystem/leadMemory');
 const clientMemory = require('../clientMemory');
 const messageQueue = require('../messageQueue');
 const cron = require('node-cron');
+
+let schedulingOpenAIClient = null;
 
 const BUSINESS_CONFIG = {
   timezone: 'America/Sao_Paulo',
@@ -227,6 +230,14 @@ function getActiveScheduling(memory, pendingScheduling) {
 }
 
 class SchedulingIntentionAnalyzer {
+  static getOpenAIClient() {
+    if (schedulingOpenAIClient) return schedulingOpenAIClient;
+    if (!process.env.OPENAI_API_KEY) return null;
+
+    schedulingOpenAIClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    return schedulingOpenAIClient;
+  }
+
   static analyzeMessage(message) {
     const msg = normalizeMessage(message);
 
@@ -247,7 +258,7 @@ class SchedulingIntentionAnalyzer {
     ];
 
     const confirmationKeywords = [
-      'confirmar', 'confirmacao', 'confirmo', 'confirma', 'confirmado', 'aceito', 'ok', 'sim', 'tudo bem',
+      'confirmar', 'confirmacao', 'confirmo', 'confirma', 'confirmado', 'aceito', 'ok', 'sim',
       'perfeito', 'pode ser', 'combinado', 'certo',
     ];
 
@@ -276,6 +287,68 @@ class SchedulingIntentionAnalyzer {
       confidence: hasIntent ? Math.min(maxMatches * 20, 100) : 0,
       matches: maxMatches,
     };
+  }
+
+  static async analyzeMessageWithAI(message, context = {}) {
+    const openai = this.getOpenAIClient();
+    if (!openai) {
+      return this.analyzeMessage(message);
+    }
+
+    const payload = {
+      latestUserMessage: message,
+      pendingScheduling: context.pendingScheduling || null,
+      activeScheduling: context.activeScheduling || null,
+      hasAvailableSlots: Boolean(context.pendingScheduling?.availableSlots?.length),
+      knownName: context.knownName || null,
+    };
+
+    try {
+      const completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_ROUTER_MODEL || 'gpt-4o-mini',
+        temperature: 0.1,
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'Você classifica a intenção operacional de uma mensagem dentro do fluxo de agendamento de uma clínica.',
+              'Tipos válidos: scheduling, confirmation, cancellation, rescheduling, none.',
+              'Use none para saudações, mensagens genéricas ou conversas que não peçam ação de agenda.',
+              'Considere fortemente o contexto pendingScheduling e activeScheduling.',
+              'Se existir pendingScheduling.step=pending_confirmation e a mensagem aprovar a reserva, retorne confirmation.',
+              'Se a mensagem quiser cancelar uma reserva existente, retorne cancellation.',
+              'Se quiser trocar dia/horário de uma reserva existente, retorne rescheduling.',
+              'Se a mensagem quiser iniciar agendamento, escolher horário, informar dia preferido, ou fornecer dados necessários para concluir o agendamento, retorne scheduling.',
+              'Não use uma lista fixa de palavras como regra principal; decida pelo significado da mensagem e pelo contexto.',
+              'Responda apenas JSON com: type, hasIntent, confidence, reason.',
+            ].join(' '),
+          },
+          {
+            role: 'user',
+            content: JSON.stringify(payload),
+          },
+        ],
+      });
+
+      const content = completion.choices?.[0]?.message?.content;
+      const parsed = JSON.parse(content || '{}');
+      const validTypes = new Set(['scheduling', 'confirmation', 'cancellation', 'rescheduling', 'none']);
+      if (!validTypes.has(parsed.type)) {
+        return this.analyzeMessage(message);
+      }
+
+      return {
+        hasIntent: parsed.type !== 'none',
+        type: parsed.type === 'none' ? null : parsed.type,
+        confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0,
+        reason: parsed.reason || null,
+        source: 'openai',
+      };
+    } catch (error) {
+      console.warn(`⚠️ [SchedulingIntentionAnalyzer] Fallback local: ${error.message}`);
+      return this.analyzeMessage(message);
+    }
   }
 
   static extractDateTime(message) {
@@ -587,7 +660,11 @@ class SchedulingManagerClass {
       }
 
       const resolvedName = resolveKnownName(phone, providedName, name);
-      const intentAnalysis = SchedulingIntentionAnalyzer.analyzeMessage(userMessage);
+      const intentAnalysis = await SchedulingIntentionAnalyzer.analyzeMessageWithAI(userMessage, {
+        pendingScheduling,
+        activeScheduling: clientContext.activeScheduling || null,
+        knownName: resolvedName,
+      });
 
       if (pendingScheduling.step === 'waiting_full_name') {
         if (!providedName) {

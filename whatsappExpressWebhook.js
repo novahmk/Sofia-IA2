@@ -10,6 +10,19 @@ process.on('unhandledRejection', (reason) => {
 
 require('dotenv').config();
 
+function assertRequiredEnv(names) {
+  const missing = names.filter((name) => !process.env[name] || !String(process.env[name]).trim());
+  if (missing.length === 0) {
+    return;
+  }
+
+  console.error(`❌ [BOOT] Variáveis obrigatórias ausentes: ${missing.join(', ')}`);
+  console.error('❌ [BOOT] Configure as variáveis no Railway em Service > Variables ou no arquivo .env local antes de iniciar o servidor.');
+  process.exit(1);
+}
+
+assertRequiredEnv(['OPENAI_API_KEY']);
+
 console.log('📌 [BOOT] Iniciando imports...');
 const express = require('express');
 const axios = require('axios');
@@ -33,7 +46,6 @@ const eventBus = require('./eventBus');
 const selfImprovement = require('./improvement/selfImprovement');
 const messageQueue = require('./messageQueue');
 const responseCache = require('./responseCache');
-const { SchedulingIntentionAnalyzer } = require('./agents/scheduling-system');
 const { jaFoiProcessada, marcarComoProcessada, salvarMensagem } = require('./conversationDB');
 const { carregarHistorico, getHorasDeContextoFrio } = require('./conversationDB');
 const leadDB = require('./leadDB');
@@ -85,12 +97,12 @@ function createFallbackMessageId(from, texto, audioUrl) {
     .digest('hex');
 }
 
-function shouldBypassResponseCache(texto, schedulingIntent, hasSchedulingInProgress) {
-  if (hasSchedulingInProgress || schedulingIntent?.hasIntent) {
+function shouldBypassResponseCache(intention, hasSchedulingInProgress) {
+  if (hasSchedulingInProgress || intention?.agent === 'administrative') {
     return true;
   }
 
-  return /(agendar|agendamento|marcar|consulta|avaliacao|avaliação|horario|horário|confirmo|confirmar|cancelar|remarcar|desmarcar|adiar)/i.test(texto);
+  return false;
 }
 
 // ── Fallback OpenAI (caso ai.js não carregue) ──
@@ -545,26 +557,30 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
         nome: lead?.nome || (pushName && pushName !== 'Cliente' ? pushName : 'Cliente'),
       };
       const horasFrio = await getHorasDeContextoFrio(from);
-      const schedulingIntent = SchedulingIntentionAnalyzer.analyzeMessage(textoLimpo);
       const memory = clientMemory?.getClientMemory ? clientMemory.getClientMemory(from) : null;
       const hasSchedulingInProgress = Boolean(memory?.pendingScheduling?.step || memory?.activeScheduling?.eventId);
-      const shouldUseSchedulingFlow = hasSchedulingInProgress || schedulingIntent.hasIntent;
-      const skipCache = shouldBypassResponseCache(textoLimpo, schedulingIntent, hasSchedulingInProgress);
+      const routedIntention = await agentContext.analyzeIntentionWithAI(textoLimpo, leadForRouting);
+      const shouldUseSchedulingFlow = hasSchedulingInProgress || [
+        'scheduling',
+        'schedule_confirmation',
+        'schedule_cancellation',
+        'reschedule',
+      ].includes(routedIntention.type);
+      const skipCache = shouldBypassResponseCache(routedIntention, hasSchedulingInProgress);
 
       // Cancelar follow-up pendente pois o lead respondeu
       await leadDB.cancelarFollowUpPendente(from).catch(() => {});
 
       if (shouldUseSchedulingFlow) {
-        const intention = await agentContext.analyzeIntentionWithAI(textoLimpo, leadForRouting);
-        console.log(`📅 [${reqId}] Intenção de agendamento detectada — usando supervisor diretamente`);
+        console.log(`📅 [${reqId}] Intenção ${routedIntention.type} detectada via OpenAI — usando supervisor diretamente`);
         const routedName = leadForRouting.nome;
-        const r = await supervisor.processMessage(from, textoLimpo, routedName, intention, {
+        const r = await supervisor.processMessage(from, textoLimpo, routedName, routedIntention, {
           horasSemContato: horasFrio,
         });
 
         await leadDB.atualizarLead(from, {
           nome: r.lead?.nome,
-          intencao: intention.type,
+          intencao: routedIntention.type,
           status: r.lead?.status || lead?.status,
         }).catch(() => {});
 

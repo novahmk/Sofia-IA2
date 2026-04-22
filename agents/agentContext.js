@@ -9,86 +9,15 @@
 'use strict';
 
 const clientMemory = require('../clientMemory');
+const { OpenAI } = require('openai');
 
 let openaiClient = null;
-
-// Mapeamentos de palavras-chave para tipo de intenção + agente responsável
-const INTENT_MAP = [
-  // Objeções comerciais
-  {
-    keywords: ['preço', 'valor', 'caro', 'barato', 'quanto custa', 'custo', 'desconto', 'parcel', 'investimento'],
-    type: 'price_objection',
-    agent: 'commercial',
-  },
-  {
-    keywords: ['demora', 'tempo', 'resultado', 'quando vejo', 'quanto tempo', 'rápido'],
-    type: 'time_objection',
-    agent: 'commercial',
-  },
-  {
-    keywords: ['vou pensar', 'não sei', 'talvez', 'pode ser', 'não tenho certeza', 'deixa eu ver'],
-    type: 'hesitation',
-    agent: 'commercial',
-  },
-  {
-    keywords: ['funciona mesmo', 'garante', 'garantia', 'realmente funciona', 'de verdade'],
-    type: 'trust_objection',
-    agent: 'commercial',
-  },
-  // Técnicas
-  {
-    keywords: [
-      'como funciona', 'o que é', 'qual a diferença', 'terapia capilar', 'tratamento',
-      'procedimento', 'mesoterapia', 'prp', 'limpeza de pele', 'botox', 'transplante',
-    ],
-    type: 'product_info',
-    agent: 'technical',
-  },
-  {
-    keywords: [
-      'queda', 'calvície', 'falha', 'afinamento', 'oleoso', 'caspa',
-      'couro cabeludo', 'fios', 'cabelo', 'crescimento',
-    ],
-    type: 'symptom_question',
-    agent: 'technical',
-  },
-  // Administrativas
-  {
-    keywords: ['cancelar', 'cancelo', 'cancelamento', 'não vou', 'nao vou', 'desisto'],
-    type: 'schedule_cancellation',
-    agent: 'administrative',
-  },
-  {
-    keywords: ['remarcar', 'reagendar', 'desmarcar', 'mudar horário', 'mudar horario', 'adiar'],
-    type: 'reschedule',
-    agent: 'administrative',
-  },
-  {
-    keywords: [
-      'agendar', 'marcar', 'horário', 'disponível', 'agenda', 'consulta', 'avaliação',
-      'quero ir', 'ir à clínica', 'visitar',
-    ],
-    type: 'scheduling',
-    agent: 'administrative',
-  },
-  {
-    keywords: ['confirmar', 'confirmo', 'confirmado', 'aceito', 'pode ser', 'combinado', 'fechado', 'ok', 'sim'],
-    type: 'schedule_confirmation',
-    agent: 'administrative',
-  },
-  {
-    keywords: ['meu nome', 'meu telefone', 'meu email', 'meus dados', 'atualizar dados'],
-    type: 'data_update',
-    agent: 'administrative',
-  },
-];
 
 class AgentContext {
   getOpenAIClient() {
     if (openaiClient) return openaiClient;
     if (!process.env.OPENAI_API_KEY) return null;
 
-    const { OpenAI } = require('openai');
     openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     return openaiClient;
   }
@@ -110,35 +39,19 @@ class AgentContext {
    * @returns {{ type: string, agent: string, entities: object }}
    */
   analyzeIntention(userMessage, lead) {
-    const msg = userMessage.toLowerCase().trim();
     const phone = lead?.telefone || lead?.lead_id;
     const memory = phone ? clientMemory.getClientMemory(phone) : null;
     const pendingScheduling = memory?.pendingScheduling;
 
     if (['waiting_day_preference', 'waiting_slot_selection', 'waiting_full_name'].includes(pendingScheduling?.step)) {
-      return { type: 'scheduling', agent: 'administrative', entities: {} };
+      return { type: 'scheduling', agent: 'administrative', entities: {}, reason: 'pending_scheduling_step' };
     }
 
     if (pendingScheduling?.step === 'pending_confirmation') {
-      if (['cancelar', 'desmarcar', 'remarcar', 'adiar'].some((k) => msg.includes(k))) {
-        return { type: 'reschedule', agent: 'administrative', entities: {} };
-      }
-
-      if (['confirmar', 'confirmo', 'confirmado', 'aceito', 'pode ser', 'combinado', 'fechado', 'ok', 'sim'].some((k) => msg.includes(k))) {
-        return { type: 'schedule_confirmation', agent: 'administrative', entities: {} };
-      }
-
-      return { type: 'scheduling', agent: 'administrative', entities: {} };
+      return { type: 'scheduling', agent: 'administrative', entities: {}, reason: 'pending_confirmation_step' };
     }
 
-    for (const pattern of INTENT_MAP) {
-      if (pattern.keywords.some((k) => msg.includes(k))) {
-        return { type: pattern.type, agent: pattern.agent, entities: {} };
-      }
-    }
-
-    // Saudação ou mensagem genérica
-    return { type: 'general', agent: 'context', entities: {} };
+    return { type: 'general', agent: 'context', entities: {}, reason: 'default_general_fallback' };
   }
 
   async analyzeIntentionWithAI(userMessage, lead) {
@@ -160,7 +73,11 @@ class AgentContext {
       activeScheduling: memory?.activeScheduling || null,
       recentConversation: this.buildRecentConversation(lead),
       latestUserMessage: userMessage,
-      heuristic,
+      fallbackState: {
+        agent: heuristic.agent,
+        type: heuristic.type,
+        reason: heuristic.reason || null,
+      },
     };
 
     try {
@@ -179,6 +96,7 @@ class AgentContext {
               'Use administrative para agendamento, confirmação, cancelamento, remarcação ou coleta de dados para concluir o agendamento.',
               'Se houver pendingScheduling.step=pending_confirmation e a mensagem confirmar, retorne schedule_confirmation.',
               'Se houver waiting_full_name e a mensagem trouxer nome completo, retorne scheduling.',
+              'Não use listas fixas de palavras-chave como regra principal. Decida pelo significado da mensagem e pelo contexto.',
               'Responda apenas JSON com: agent, type, confidence, reason.',
             ].join(' '),
           },

@@ -33,6 +33,20 @@
  */
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
+
+function assertRequiredEnv(names) {
+    const missing = names.filter((name) => !process.env[name] || !String(process.env[name]).trim());
+    if (missing.length === 0) {
+        return;
+    }
+
+    console.error(`❌ [BOOT] Variáveis obrigatórias ausentes: ${missing.join(', ')}`);
+    console.error('❌ [BOOT] Configure as variáveis no Railway em Service > Variables ou no arquivo .env local antes de iniciar o servidor.');
+    process.exit(1);
+}
+
+assertRequiredEnv(['OPENAI_API_KEY']);
+
 const http = require('http');
 const { getSofiaResponse } = require('./ai');
 const { transcribeAudioFromUrl, detectMediaTypeFromMime, createAudioContext } = require('./audioProcessor');

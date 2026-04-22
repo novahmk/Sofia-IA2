@@ -6,6 +6,14 @@ Para rodar no Railway, o servidor principal agora usa `whatsappExpressWebhook.js
 
 Checklist operacional pronto para colar variáveis no Railway: [RAILWAY_ENV_CHECKLIST.md](RAILWAY_ENV_CHECKLIST.md)
 
+Onde configurar a chave da OpenAI no Railway:
+
+- Abra o projeto no Railway
+- Entre no serviço que executa a Sofia IA
+- Abra `Variables`
+- Adicione `OPENAI_API_KEY`
+- Faça redeploy
+
 - Comando de start: `npm start`
 - Rota de webhook: `/webhook`
 - Rota de verificação: `GET /webhook?hub.mode=subscribe&hub.verify_token=...&hub.challenge=...`
@@ -29,7 +37,7 @@ Checklist operacional pronto para colar variáveis no Railway: [RAILWAY_ENV_CHEC
 
 O roteador contextual de intenções usa a OpenAI para interpretar a conversa inteira do lead antes de decidir o agente e a intenção.
 
-- Sem `OPENAI_API_KEY`, o sistema entra em fallback heurístico automaticamente.
+- Sem `OPENAI_API_KEY`, a aplicação não sobe; o boot falha imediatamente.
 - Com `OPENAI_API_KEY`, o roteador contextual fica ativo.
 - O modelo pode ser ajustado com `OPENAI_ROUTER_MODEL`.
 
@@ -51,7 +59,7 @@ Arquivo de deploy atual: [railway.toml](railway.toml)
 
 Variáveis que faltarem no Railway afetam o sistema assim:
 
-- `OPENAI_API_KEY`: a IA principal entra em fallback e o roteador vira heurístico.
+- `OPENAI_API_KEY`: o processo falha no boot com exit code `1`.
 - `WASENDERAPI_TOKEN`: o webhook processa a conversa, mas não consegue enviar respostas para o WhatsApp.
 - `WASENDERAPI_WEBHOOK_SECRET` ou `WEBHOOK_SECRET`: o webhook fica sem validação de assinatura.
 - `DATABASE_URL`: histórico, deduplicação e leads estruturados caem para fallback local/em memória.

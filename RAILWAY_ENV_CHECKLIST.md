@@ -2,6 +2,16 @@
 
 Checklist pronto para configurar o deploy da Sofia IA no Railway.
 
+## Onde configurar no Railway
+
+No serviço que executa a Sofia IA:
+
+1. Abra o projeto no Railway.
+2. Entre no serviço da aplicação.
+3. Abra a aba Variables.
+4. Crie a variável `OPENAI_API_KEY` com a chave real da OpenAI.
+5. Salve e faça redeploy ou aguarde o redeploy automático.
+
 ## Mínimo para produção estável
 
 ```env
@@ -37,7 +47,7 @@ JWT_SECRET=segredo-forte-opcional
 
 ## Leitura rápida dos problemas mais comuns
 
-- Sem `OPENAI_API_KEY`: a IA principal entra em fallback e o roteador fica heurístico.
+- Sem `OPENAI_API_KEY`: a aplicação falha no boot imediatamente com exit code 1.
 - Sem `WASENDERAPI_TOKEN`: o webhook processa, mas não envia a resposta ao WhatsApp.
 - Sem `DATABASE_URL`: leads, histórico e deduplicação ficam em fallback local.
 - Sem `GOOGLE_SERVICE_ACCOUNT_JSON` ou `GOOGLE_SERVICE_ACCOUNT_FILE`: o agendamento não consegue operar via Google Calendar.
