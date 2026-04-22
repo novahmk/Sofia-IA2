@@ -26,6 +26,16 @@ function detectarPedidoHumano(texto) {
   return TRIGGERS_HUMANO.some(r => r.test(texto));
 }
 
+const OUTPUT_FORMAT_INSTRUCTION = `IMPORTANTE: Responda SEMPRE em JSON válido com esta estrutura exata (sem markdown, sem blocos de código):
+{
+  "texto": "sua resposta para o lead aqui",
+  "lead_status": "quente|morno|frio",
+  "lead_intent": "agendamento|duvida|preco|curioso",
+  "resumo_lead": "resumo em 1 frase",
+  "score": 0,
+  "agendamento_retorno": null
+}`;
+
 const SYSTEM_PROMPT_BASE = `Você é Sofia, consultora de Terapia Capilar da Clínica Quality Hair (Vila Mariana, metrô Paraíso, SP).
 
 PERSONALIDADE:
@@ -49,17 +59,9 @@ REGRAS:
 - NUNCA perguntar "quer agendar?" — SEMPRE ofereça 2 opções de horário diretamente
 - Se lead mudar de assunto, retome o contexto de vendas naturalmente
 - O campo "agendamento_retorno" deve ser preenchido com ISO datetime SE o lead pedir para ser contactado depois (ex: "fala amanhã", "pode ser sexta")
-- Caso contrário, "agendamento_retorno" deve ser null`;
+- Caso contrário, "agendamento_retorno" deve ser null
 
-const OUTPUT_FORMAT_INSTRUCTION = `IMPORTANTE: Responda SEMPRE em JSON válido com esta estrutura exata (sem markdown, sem blocos de código):
-{
-  "texto": "sua resposta para o lead aqui",
-  "lead_status": "quente|morno|frio",
-  "lead_intent": "agendamento|duvida|preco|curioso",
-  "resumo_lead": "resumo em 1 frase",
-  "score": 0,
-  "agendamento_retorno": null
-}`;
+${OUTPUT_FORMAT_INSTRUCTION}`;
 
 /**
  * Chama a IA com output JSON estruturado.
@@ -109,7 +111,6 @@ async function chamarIA({ telefone, textoFinal, historico, lead, horasFrio, isPr
     { role: 'system', content: systemContent },
     ...historico.map(h => ({ role: h.role, content: h.conteudo || h.content || '' })),
     { role: 'user', content: textoFinal },
-    { role: 'system', content: OUTPUT_FORMAT_INSTRUCTION },
   ];
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });

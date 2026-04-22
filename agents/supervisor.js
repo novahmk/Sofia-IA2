@@ -17,7 +17,7 @@
 'use strict';
 
 const leadMemory = require('../leadSystem/leadMemory');
-const followUpManager = require('../leadSystem/followUpManager');
+const leadDB = require('../leadDB');
 const agentContext = require('./agentContext');
 const agentCommercial = require('./agentCommercial');
 const agentTechnical = require('./agentTechnical');
@@ -68,29 +68,29 @@ class SupervisorAgent {
    * @param {string} name
    * @returns {Promise<{ response: string, lead: object }>}
    */
-  async processMessage(phone, userMessage, name = 'Cliente', precomputedIntention = null) {
+  async processMessage(phone, userMessage, name = 'Cliente', precomputedIntention = null, runtimeContext = {}) {
     const start = Date.now();
 
     // 1. Carrega/cria lead
-    const lead = await leadMemory.getOrCreateLead(phone, name);
+    const lead = {
+      ...(await leadMemory.getOrCreateLead(phone, name)),
+      ...runtimeContext,
+    };
 
-    // 2. Salva mensagem do usuário no histórico do lead
-    await leadMemory.saveContext(phone, userMessage, true);
-
-    // 3. Detecta progressão de funil
+    // 2. Detecta progressão de funil
     const newStage = detectFunnelProgression(lead, userMessage);
     if (newStage !== lead.etapa_funil) {
       await leadMemory.updateLead(phone, { etapa_funil: newStage });
       lead.etapa_funil = newStage;
     }
 
-    // 4. Análise de intenção (síncrona, sem custo de API)
+    // 3. Análise de intenção (síncrona, sem custo de API)
     const intention = precomputedIntention || await agentContext.analyzeIntentionWithAI(userMessage, lead);
     console.log(
       `🎯 [Supervisor] Agente: ${intention.agent} | Intenção: ${intention.type}${intention.source ? ` | Fonte: ${intention.source}` : ''}`
     );
 
-    // 5. Roteia para agente especializado
+    // 4. Roteia para agente especializado
     let response;
     try {
       switch (intention.agent) {
@@ -115,18 +115,20 @@ class SupervisorAgent {
       response = await agentContext.respond(phone, userMessage, lead, intention);
     }
 
-    // 6. Persiste resposta e atualiza lead
-    await leadMemory.saveContext(phone, response, false);
+    // 5. Atualiza lead
     await leadMemory.updateLead(phone, { etapa_funil: lead.etapa_funil });
 
-    // 7. Agenda follow-up automático no primeiro contato
+    // 6. Agenda follow-up automático no sistema novo
     if (lead.etapa_funil === 'novo' && (lead.follow_up_count || 0) === 0) {
-      await followUpManager.scheduleFollowUp(phone, 2, 'primeiro_contato');
+      await leadDB.atualizarLead(phone, {
+        follow_up_count: 0,
+        follow_up_proximo: new Date(Date.now() + 2 * 86_400_000).toISOString(),
+      });
     }
 
     const latency = Date.now() - start;
 
-    // 8. Publica eventos para o dashboard (SSE)
+    // 7. Publica eventos para o dashboard (SSE)
     eventBus.publish('agent_routed', {
       phone,
       agent: intention.agent,
@@ -142,7 +144,7 @@ class SupervisorAgent {
       leadStage: lead.etapa_funil,
     });
 
-    // 9. Feedback loop em background (não bloqueia resposta)
+    // 8. Feedback loop em background (não bloqueia resposta)
     setImmediate(() => {
       selfImprovement.analyze(phone, userMessage, response, {
         agentUsed: intention.agent,

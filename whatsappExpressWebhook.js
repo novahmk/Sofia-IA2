@@ -30,16 +30,16 @@ const agentContext = require('./agents/agentContext');
 const supervisor = require('./agents/supervisor');
 const leadMemory = require('./leadSystem/leadMemory');
 const eventBus = require('./eventBus');
-const followUpManager = require('./leadSystem/followUpManager');
 const selfImprovement = require('./improvement/selfImprovement');
 const messageQueue = require('./messageQueue');
 const responseCache = require('./responseCache');
 const { SchedulingIntentionAnalyzer } = require('./agents/scheduling-system');
 const { jaFoiProcessada, marcarComoProcessada, salvarMensagem } = require('./conversationDB');
-const { carregarHistorico, injetarContextoFrio } = require('./conversationDB');
+const { carregarHistorico, getHorasDeContextoFrio } = require('./conversationDB');
 const leadDB = require('./leadDB');
 const { chamarIA } = require('./sdrAI');
 const calendarService = require('./calendar');
+const db = require('./database');
 
 try {
   const ai = require('./ai');
@@ -75,6 +75,23 @@ const WEBHOOK_SECRET = process.env.WASENDERAPI_WEBHOOK_SECRET || process.env.WEB
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const WASENDERAPI_BASE_URL = process.env.WASENDERAPI_BASE_URL || 'https://www.wasenderapi.com/api';
 const WASENDERAPI_TOKEN = process.env.WASENDERAPI_TOKEN || process.env.API_ACCESS_TOKEN;
+
+function createFallbackMessageId(from, texto, audioUrl) {
+  const fingerprint = String(texto || audioUrl || 'sem-conteudo').trim();
+  const timeBucket = Math.floor(Date.now() / 5000);
+  return crypto
+    .createHash('md5')
+    .update(`${from}|${fingerprint}|${timeBucket}`)
+    .digest('hex');
+}
+
+function shouldBypassResponseCache(texto, schedulingIntent, hasSchedulingInProgress) {
+  if (hasSchedulingInProgress || schedulingIntent?.hasIntent) {
+    return true;
+  }
+
+  return /(agendar|agendamento|marcar|consulta|avaliacao|avaliação|horario|horário|confirmo|confirmar|cancelar|remarcar|desmarcar|adiar)/i.test(texto);
+}
 
 // ── Fallback OpenAI (caso ai.js não carregue) ──
 let _openai = null;
@@ -422,8 +439,12 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
       .trim();
     if (from && !from.startsWith('+')) from = '+' + from;
 
+    if (!messageId) {
+      messageId = createFallbackMessageId(from, texto, audioUrl);
+    }
+
     // ── Deduplicação: ignorar mensagens que já foram processadas ──
-    if (messageId && await jaFoiProcessada(messageId)) {
+    if (await jaFoiProcessada(messageId)) {
       console.log(`⏭️ [${reqId}] Mensagem duplicada (${messageId}), ignorando`);
       return;
     }
@@ -514,7 +535,8 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
 
     const startAI = Date.now();
     const result = await messageQueue.enqueue(from, async () => {
-      // Verificar cache antes de chamar a IA
+      await db.ready.catch(() => {});
+
       const lead = await leadDB.buscarOuCriarLead(from).catch(() => ({ status: 'novo', score: 0 }));
       const leadForRouting = {
         ...lead,
@@ -522,22 +544,23 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
         lead_id: lead?.lead_id || from,
         nome: lead?.nome || (pushName && pushName !== 'Cliente' ? pushName : 'Cliente'),
       };
-      const intention = await agentContext.analyzeIntentionWithAI(textoLimpo, leadForRouting);
+      const horasFrio = await getHorasDeContextoFrio(from);
       const schedulingIntent = SchedulingIntentionAnalyzer.analyzeMessage(textoLimpo);
       const memory = clientMemory?.getClientMemory ? clientMemory.getClientMemory(from) : null;
       const hasSchedulingInProgress = Boolean(memory?.pendingScheduling?.step || memory?.activeScheduling?.eventId);
-      const shouldUseSchedulingFlow =
-        hasSchedulingInProgress ||
-        (schedulingIntent.hasIntent && ['scheduling', 'confirmation', 'cancellation', 'rescheduling'].includes(schedulingIntent.type)) ||
-        (intention.agent === 'administrative' && ['scheduling', 'reschedule', 'schedule_confirmation', 'schedule_cancellation'].includes(intention.type));
+      const shouldUseSchedulingFlow = hasSchedulingInProgress || schedulingIntent.hasIntent;
+      const skipCache = shouldBypassResponseCache(textoLimpo, schedulingIntent, hasSchedulingInProgress);
 
       // Cancelar follow-up pendente pois o lead respondeu
       await leadDB.cancelarFollowUpPendente(from).catch(() => {});
 
       if (shouldUseSchedulingFlow) {
+        const intention = await agentContext.analyzeIntentionWithAI(textoLimpo, leadForRouting);
         console.log(`📅 [${reqId}] Intenção de agendamento detectada — usando supervisor diretamente`);
         const routedName = leadForRouting.nome;
-        const r = await supervisor.processMessage(from, textoLimpo, routedName, intention);
+        const r = await supervisor.processMessage(from, textoLimpo, routedName, intention, {
+          horasSemContato: horasFrio,
+        });
 
         await leadDB.atualizarLead(from, {
           nome: r.lead?.nome,
@@ -549,23 +572,17 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
       }
 
       const etapa = lead?.status || lead?.etapa_funil || 'novo';
-      const cached = await responseCache.get(textoLimpo, etapa);
-      if (cached) {
-        console.log(`⚡ [${reqId}] Cache hit (${etapa}) — saltou OpenAI`);
-        return { response: cached, _fromCache: true };
+      if (!skipCache) {
+        const cached = await responseCache.get(textoLimpo, etapa);
+        if (cached) {
+          console.log(`⚡ [${reqId}] Cache hit (${etapa}) — saltou OpenAI`);
+          return { response: cached, _fromCache: true };
+        }
       }
 
       // Carregar histórico PostgreSQL e dados de contexto
       const historico = await carregarHistorico(from, 20);
       const isPrimeiroContato = historico.filter(h => h.role === 'user').length <= 1;
-
-      // Contexto frio via leads.ultimo_contato
-      const horasFrio = lead.ultimo_contato
-        ? (() => {
-            const h = (Date.now() - new Date(lead.ultimo_contato).getTime()) / 3_600_000;
-            return h > 4 ? Math.round(h) : null;
-          })()
-        : null;
 
       // Chamar IA com output JSON estruturado (sdrAI)
       let sdrResult;
@@ -577,6 +594,18 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
         return { response: r.response, _fromSupervisor: true };
       }
 
+      if (sdrResult.lead_intent === 'agendamento') {
+        const r = await supervisor.processMessage(from, textoLimpo, leadForRouting.nome, {
+          agent: 'administrative',
+          type: 'scheduling',
+          source: 'sdr_redirect',
+          entities: {},
+        }, {
+          horasSemContato: horasFrio,
+        });
+        return { response: r.response, _fromSupervisor: true, _fromSdrRedirect: true };
+      }
+
       const resposta = sdrResult.texto;
 
       // Atualizar campos estruturados do lead
@@ -585,7 +614,7 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
         intencao: sdrResult.lead_intent,
         resumo_conversa: sdrResult.resumo_lead,
         score: sdrResult.score,
-        nome: lead.nome || pushName !== 'Cliente' ? pushName : undefined,
+        nome: lead.nome || (pushName !== 'Cliente' ? pushName : undefined),
       }).catch(() => {});
 
       // Agendar retorno se IA detectou pedido do lead
@@ -595,7 +624,7 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
 
       // Salva no cache apenas respostas não personalizadas
       const isPersonalized = lead?.nome && resposta.includes(lead.nome);
-      if (resposta && !isPersonalized) {
+      if (resposta && !isPersonalized && !skipCache) {
         await responseCache.set(textoLimpo, etapa, resposta);
       }
 
@@ -672,8 +701,7 @@ if (knowledgeBase && typeof knowledgeBase.initialize === 'function') {
 
 // ── Follow-up Cron (5s após o servidor subir) ──
 setTimeout(() => {
-  console.log('⏰ Iniciando cron de follow-up (legado)...');
-  followUpManager.startCron(enviarMensagem);
+  console.log('⏰ Cron legado de follow-up desativado; usando apenas followUpCron.');
 
   // Novo cron SDR (node-cron) com follow-up estruturado + retornos agendados
   try {

@@ -14,8 +14,77 @@ const MEMORY_FILE = path.join(__dirname, 'client_memories.json');
 class ClientMemory {
     constructor() {
         this.memories = this.loadMemories();
+        this.pendingBeforeHydration = {};
+        this.dbHydrationSynced = !db || db.hydrated;
+
+        if (db?.ready) {
+            db.ready
+                .then(() => {
+                    this.dbHydrationSynced = true;
+                    this.memories = db.getAll('client_memories');
+
+                    for (const [phone, pendingMemory] of Object.entries(this.pendingBeforeHydration)) {
+                        this.memories[phone] = this.memories[phone]
+                            ? this.mergeMemoryState(this.memories[phone], pendingMemory)
+                            : pendingMemory;
+                    }
+
+                    if (Object.keys(this.pendingBeforeHydration).length > 0) {
+                        this.saveMemories();
+                    }
+
+                    this.pendingBeforeHydration = {};
+                })
+                .catch((error) => {
+                    console.warn(`⚠️ Erro ao sincronizar memórias após hydrate: ${error.message}`);
+                });
+        }
+
         // Auto-sync para SQLite a cada 15s
         this.autoSaveInterval = setInterval(() => this.saveMemories(), 15000);
+    }
+
+    mergeMemoryState(existingMemory = {}, pendingMemory = {}) {
+        const existingConversation = existingMemory.conversation || {};
+        const pendingConversation = pendingMemory.conversation || {};
+        const existingAppointments = existingMemory.appointments || {};
+        const pendingAppointments = pendingMemory.appointments || {};
+
+        return {
+            ...existingMemory,
+            ...pendingMemory,
+            personal: {
+                ...(existingMemory.personal || {}),
+                ...(pendingMemory.personal || {}),
+            },
+            hair_health: {
+                ...(existingMemory.hair_health || {}),
+                ...(pendingMemory.hair_health || {}),
+                concerns: [...new Set([...(existingMemory.hair_health?.concerns || []), ...(pendingMemory.hair_health?.concerns || [])])],
+                allergies: [...new Set([...(existingMemory.hair_health?.allergies || []), ...(pendingMemory.hair_health?.allergies || [])])],
+                medical_conditions: [...new Set([...(existingMemory.hair_health?.medical_conditions || []), ...(pendingMemory.hair_health?.medical_conditions || [])])],
+            },
+            conversation: {
+                ...existingConversation,
+                ...pendingConversation,
+                total_messages: Math.max(existingConversation.total_messages || 0, pendingConversation.total_messages || 0),
+                topics_discussed: [...new Set([...(existingConversation.topics_discussed || []), ...(pendingConversation.topics_discussed || [])])],
+                questions_asked: [...(existingConversation.questions_asked || []), ...(pendingConversation.questions_asked || [])],
+                objections: [...new Set([...(existingConversation.objections || []), ...(pendingConversation.objections || [])])],
+            },
+            preferences: {
+                ...(existingMemory.preferences || {}),
+                ...(pendingMemory.preferences || {}),
+            },
+            appointments: {
+                ...existingAppointments,
+                ...pendingAppointments,
+                scheduled: [...(existingAppointments.scheduled || []), ...(pendingAppointments.scheduled || [])],
+                completed: [...(existingAppointments.completed || []), ...(pendingAppointments.completed || [])],
+                cancelled: [...(existingAppointments.cancelled || []), ...(pendingAppointments.cancelled || [])],
+            },
+            notes: [...(existingMemory.notes || []), ...(pendingMemory.notes || [])],
+        };
     }
 
     /**
@@ -67,7 +136,7 @@ class ClientMemory {
      */
     initializeClientMemory(phoneNumber) {
         if (!this.memories[phoneNumber]) {
-            this.memories[phoneNumber] = {
+            const newMemory = {
                 phone: phoneNumber,
                 created_at: new Date().toISOString(),
                 last_updated: new Date().toISOString(),
@@ -122,6 +191,12 @@ class ClientMemory {
                 // Notas da conversa
                 notes: []
             };
+
+            this.memories[phoneNumber] = newMemory;
+
+            if (db && !this.dbHydrationSynced) {
+                this.pendingBeforeHydration[phoneNumber] = newMemory;
+            }
 
             console.log(`📝 Memória criada para ${phoneNumber}`);
         }

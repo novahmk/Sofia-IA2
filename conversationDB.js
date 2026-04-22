@@ -114,6 +114,17 @@ async function getUltimaMensagem(telefone) {
   }
 }
 
+async function getHorasDeContextoFrio(telefone) {
+  try {
+    const ultima = await getUltimaMensagem(telefone);
+    if (!ultima) return null;
+    const horasParado = (Date.now() - new Date(ultima).getTime()) / 3_600_000;
+    return horasParado >= COLD_CONTEXT_HOURS ? Math.round(horasParado) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 /**
  * Injeta instrução de contexto frio no system prompt quando o lead ficou
  * mais de COLD_CONTEXT_HOURS horas sem responder.
@@ -123,14 +134,11 @@ async function getUltimaMensagem(telefone) {
  */
 async function injetarContextoFrio(systemPrompt, telefone) {
   try {
-    const ultima = await getUltimaMensagem(telefone);
-    if (!ultima) return systemPrompt;
-    const horasParado = (Date.now() - new Date(ultima).getTime()) / 3_600_000;
-    if (horasParado >= COLD_CONTEXT_HOURS) {
-      const hStr = Math.round(horasParado);
+    const horasParado = await getHorasDeContextoFrio(telefone);
+    if (horasParado) {
       return (
         systemPrompt +
-        `\n\n[RETOMADA DE CONVERSA: Este lead ficou ${hStr}h sem responder. ` +
+        `\n\n[RETOMADA DE CONVERSA: Este lead ficou ${horasParado}h sem responder. ` +
         `Retome com gentileza, resgate brevemente o interesse anterior e ` +
         `ofereça um caminho claro para o próximo passo. Não repita perguntas já feitas.]`
       );
@@ -144,5 +152,6 @@ module.exports = {
   salvarMensagem,
   jaFoiProcessada,
   marcarComoProcessada,
+  getHorasDeContextoFrio,
   injetarContextoFrio,
 };

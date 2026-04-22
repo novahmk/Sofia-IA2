@@ -82,6 +82,7 @@ class AgentCommercial {
       `Nome: ${lead.nome}`,
       `Etapa do funil: ${lead.etapa_funil}`,
       `Follow-ups: ${lead.follow_up_count || 0}`,
+      lead.horasSemContato ? `Retomada após ${lead.horasSemContato}h sem contato` : '',
       historico ? `\nHistórico:\n${historico}` : '',
       '[FIM DO CONTEXTO]',
       objCtx,

@@ -51,9 +51,12 @@ const SEQUENCIA_FOLLOWUP = [
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function dentroDoHorarioComercial() {
-  // América/Sao_Paulo — UTC-3
-  const agora = new Date();
-  const hora = new Date(agora.getTime() - 3 * 3600000).getUTCHours();
+  const horaBrasil = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    hour: 'numeric',
+    hour12: false,
+  }).format(new Date());
+  const hora = parseInt(horaBrasil, 10);
   return hora >= 9 && hora < 18;
 }
 

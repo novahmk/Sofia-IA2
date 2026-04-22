@@ -54,6 +54,7 @@ class AgentTechnical {
       '[CONTEXTO DO LEAD]',
       `Nome: ${lead.nome}`,
       `Etapa do funil: ${lead.etapa_funil}`,
+      lead.horasSemContato ? `Retomada após ${lead.horasSemContato}h sem contato` : '',
       historico ? `\nHistórico:\n${historico}` : '',
       '[FIM DO CONTEXTO]',
       techCtx,
