@@ -13,6 +13,7 @@ Para rodar no Railway, o servidor principal agora usa `whatsappExpressWebhook.js
 ## Variáveis de ambiente necessárias
 
 - `OPENAI_API_KEY`
+- `OPENAI_ROUTER_MODEL` (opcional; padrão: `gpt-4o-mini` para o roteador contextual)
 - `WASENDERAPI_BASE_URL`
 - `WASENDERAPI_TOKEN`
 - `PHONE_NUMBER_ID`
@@ -21,6 +22,54 @@ Para rodar no Railway, o servidor principal agora usa `whatsappExpressWebhook.js
 - `WEBHOOK_API_KEY` (opcional)
 - `DATABASE_URL` (se usar o banco de dados)
 - `JWT_SECRET` (não usado atualmente no servidor principal)
+
+## Validação do roteador OpenAI em produção
+
+O roteador contextual de intenções usa a OpenAI para interpretar a conversa inteira do lead antes de decidir o agente e a intenção.
+
+- Sem `OPENAI_API_KEY`, o sistema entra em fallback heurístico automaticamente.
+- Com `OPENAI_API_KEY`, o roteador contextual fica ativo.
+- O modelo pode ser ajustado com `OPENAI_ROUTER_MODEL`.
+
+Como validar após subir o deploy:
+
+- Acesse `GET /health`
+- Confirme `ai.openaiConfigured: true`
+- Confirme `router.mode: "openai"`
+- Confirme `integrations.wasenderapi: true`
+- Nos logs de runtime, confirme `🧠 OpenAI: SIM` e `🧭 Router: OPENAI`
+
+## Matriz Railway
+
+Arquivo de deploy atual: [railway.toml](railway.toml)
+
+- Build: `npm install --omit=optional`
+- Start: `node whatsappExpressWebhook.js`
+- Restart policy: `on_failure` com 3 tentativas
+
+Variáveis que faltarem no Railway afetam o sistema assim:
+
+- `OPENAI_API_KEY`: a IA principal entra em fallback e o roteador vira heurístico.
+- `WASENDERAPI_TOKEN`: o webhook processa a conversa, mas não consegue enviar respostas para o WhatsApp.
+- `WASENDERAPI_WEBHOOK_SECRET` ou `WEBHOOK_SECRET`: o webhook fica sem validação de assinatura.
+- `DATABASE_URL`: histórico, deduplicação e leads estruturados caem para fallback local/em memória.
+- `REDIS_URL`: fila/cache continuam, mas sem backend Redis configurado.
+- `GOOGLE_SERVICE_ACCOUNT_FILE` ou `GOOGLE_SERVICE_ACCOUNT_JSON`: agenda Google não inicializa via conta de serviço.
+- `GOOGLE_CALENDAR_ID`: usa `primary` por padrão.
+
+Checklist mínimo para produção estável no Railway:
+
+- `OPENAI_API_KEY`
+- `WASENDERAPI_TOKEN`
+- `WASENDERAPI_WEBHOOK_SECRET`
+- `DATABASE_URL`
+- `GOOGLE_SERVICE_ACCOUNT_JSON` ou `GOOGLE_SERVICE_ACCOUNT_FILE`
+
+Checklist recomendado:
+
+- `OPENAI_ROUTER_MODEL`
+- `REDIS_URL`
+- `GOOGLE_CALENDAR_ID`
 
 ## Google Calendar via Conta de Serviço
 

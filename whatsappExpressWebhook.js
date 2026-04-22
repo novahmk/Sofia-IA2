@@ -182,16 +182,39 @@ function checkIpRateLimit(ip) {
 app.get('/', (req, res) => res.json({ status: 'ok' }));
 app.get('/health', (req, res) => {
   const { chatHistoriesAdapter, customerIntentsAdapter } = require('./redisStateAdapter');
+  const routerMode = process.env.OPENAI_API_KEY ? 'openai' : 'heuristic';
+  const aiMode = getSofiaResponse ? 'full' : 'fallback';
+  const calendarMode = [
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+    process.env.GOOGLE_SERVICE_ACCOUNT_FILE,
+    process.env.GOOGLE_CLIENT_ID,
+  ].some(Boolean)
+    ? 'configured'
+    : 'missing';
   res.json({
     status: 'ok',
     time: Date.now(),
     uptime: Math.floor(process.uptime()),
     nodeEnv: process.env.NODE_ENV || 'development',
-    ai: getSofiaResponse ? 'full' : 'fallback',
-    openai: !!process.env.OPENAI_API_KEY,
-    wasenderapi: !!process.env.WASENDERAPI_TOKEN,
-    database: !!process.env.DATABASE_URL,
-    redis: !!process.env.REDIS_URL,
+    ai: {
+      mode: aiMode,
+      available: Boolean(getSofiaResponse),
+      openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+    },
+    router: {
+      mode: routerMode,
+      model: process.env.OPENAI_ROUTER_MODEL || 'gpt-4o-mini',
+      openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+    },
+    integrations: {
+      wasenderapi: Boolean(process.env.WASENDERAPI_TOKEN),
+      database: Boolean(process.env.DATABASE_URL),
+      redis: Boolean(process.env.REDIS_URL),
+      calendar: {
+        mode: calendarMode,
+        calendarId: process.env.GOOGLE_CALENDAR_ID || 'primary',
+      },
+    },
     queue: require('./messageQueue').getStats(),
     cache: require('./responseCache').getStats(),
   });
@@ -206,7 +229,11 @@ h1{margin-top:0} .ok{color:green} .fail{color:red}</style></head><body><div clas
 <h1>Dashboard Sofia IA</h1>
 <p>Servidor online.</p>
 <ul>
-<li>AI: <strong class="${getSofiaResponse ? 'ok' : 'fail'}">${getSofiaResponse ? '✅ Completa' : '❌ Fallback'}</strong></li>
+<li>AI principal: <strong class="${getSofiaResponse ? 'ok' : 'fail'}">${getSofiaResponse ? '✅ Completa' : '❌ Fallback'}</strong></li>
+<li>Roteador: <strong class="${OPENAI_API_KEY ? 'ok' : 'fail'}">${OPENAI_API_KEY ? '✅ OpenAI' : '❌ Heurístico'}</strong></li>
+<li>OpenAI: <strong class="${OPENAI_API_KEY ? 'ok' : 'fail'}">${OPENAI_API_KEY ? '✅ Configurada' : '❌ Ausente'}</strong></li>
+<li>WASenderAPI: <strong class="${WASENDERAPI_TOKEN ? 'ok' : 'fail'}">${WASENDERAPI_TOKEN ? '✅ Configurada' : '❌ Ausente'}</strong></li>
+<li>Banco: <strong class="${process.env.DATABASE_URL ? 'ok' : 'fail'}">${process.env.DATABASE_URL ? '✅ Configurado' : '❌ Fallback local'}</strong></li>
 <li>Sanitizer: <strong class="${inputSanitizer ? 'ok' : 'fail'}">${inputSanitizer ? '✅' : '❌'}</strong></li>
 <li>KB: <strong class="${knowledgeBase ? 'ok' : 'fail'}">${knowledgeBase ? '✅' : '❌'}</strong></li>
 </ul></div></body></html>`);
@@ -617,6 +644,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`🔑 Token: ${WASENDERAPI_TOKEN ? 'SIM' : '⚠️ NÃO'}`);
   console.log(`🔐 Secret: ${WEBHOOK_SECRET ? 'SIM' : '⚠️ NÃO'}`);
   console.log(`🧠 OpenAI: ${OPENAI_API_KEY ? 'SIM' : '⚠️ NÃO'}`);
+  console.log(`🧭 Router: ${OPENAI_API_KEY ? 'OPENAI' : 'HEURISTIC'} (${process.env.OPENAI_ROUTER_MODEL || 'gpt-4o-mini'})`);
   console.log(`🤖 AI: ${getSofiaResponse ? 'COMPLETO (ai.js)' : 'FALLBACK (gpt-4o-mini)'}`);
   if (!OPENAI_API_KEY) console.error('🚨 OPENAI_API_KEY ausente!');
   if (!WASENDERAPI_TOKEN) console.error('🚨 WASENDERAPI_TOKEN ausente!');
