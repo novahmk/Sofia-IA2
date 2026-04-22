@@ -64,6 +64,15 @@ Variáveis relevantes:
 - `MONITOR_INTERVAL_MS`
 - `MONITOR_ALERT_REPEAT_MS`
 
+Exemplos de uso via WhatsApp:
+
+- Somente do número de monitoramento configurado: `/ping`
+- Alias equivalente no mesmo número: `/health`
+
+Para uso externo fora do WhatsApp, a rota HTTP continua disponível com token:
+
+- `POST /ping` com `Authorization: Bearer <MONITORING_PING_TOKEN>`
+
 ## Matriz Railway
 
 Arquivo de deploy atual: [railway.toml](railway.toml)

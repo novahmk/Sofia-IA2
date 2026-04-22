@@ -186,6 +186,30 @@ async function enviarMensagem(to, text) {
   }
 }
 
+async function tryHandleOperationalCommand(from, textoLimpo, messageId, reqId) {
+  const command = healthMonitor.parsePingCommand(textoLimpo);
+  if (!command.isPingCommand) {
+    return false;
+  }
+
+  console.log(`🩺 [${reqId}] Comando ${command.command} recebido de ${from}`);
+  await marcarComoProcessada(messageId);
+
+  const authorization = healthMonitor.authorizePingCommand(from, command.providedToken);
+  if (!authorization.authorized) {
+    await enviarMensagem(
+      from,
+      'Comando /ping não autorizado. Esse comando via WhatsApp está restrito ao número de monitoramento configurado.',
+    );
+    return true;
+  }
+
+  const { summary } = await healthMonitor.runMonitoringCheck({ force: true, notify: false });
+  await enviarMensagem(from, healthMonitor.formatMonitorMessage(summary, 'ping'));
+  console.log(`✅ [${reqId}] /ping respondido para ${from} via ${authorization.mode}`);
+  return true;
+}
+
 // ── Rate limiter por telefone ──
 const rateLimits = {};
 function checkRateLimit(phone) {
@@ -573,6 +597,10 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
           auditLogger.inputSanitized(from, sanitized.flags);
         }
       } catch (e) { /* sanitizer não essencial */ }
+    }
+
+    if (await tryHandleOperationalCommand(from, textoLimpo, messageId, reqId)) {
+      return;
     }
 
     // Topic blacklist

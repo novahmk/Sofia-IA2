@@ -38,6 +38,41 @@ function getPingToken() {
   return String(process.env.MONITORING_PING_TOKEN || process.env.WEBHOOK_API_KEY || '').trim();
 }
 
+function getAllowedPingPhones() {
+  return new Set([getAlertPhone()].filter(Boolean));
+}
+
+function parsePingCommand(text) {
+  const trimmed = String(text || '').trim();
+  const match = trimmed.match(/^\/(ping|health)(?:\s+(.+))?$/i);
+
+  if (!match) {
+    return { isPingCommand: false, command: null, providedToken: '', args: [] };
+  }
+
+  const args = String(match[2] || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  return {
+    isPingCommand: true,
+    command: match[1].toLowerCase(),
+    providedToken: args[0] || '',
+    args,
+  };
+}
+
+function authorizePingCommand(phone, providedToken = '') {
+  const normalizedPhone = normalizePhone(phone);
+
+  if (getAllowedPingPhones().has(normalizedPhone)) {
+    return { authorized: true, mode: 'allowlist' };
+  }
+
+  return { authorized: false, mode: 'denied' };
+}
+
 function getMonitorIntervalMs() {
   return parsePositiveInt(process.env.MONITOR_INTERVAL_MS, 60 * 60 * 1000);
 }
@@ -245,9 +280,12 @@ function startMonitoring(sendMessage) {
 }
 
 module.exports = {
+  authorizePingCommand,
   formatMonitorMessage,
+  getAllowedPingPhones,
   getMonitoringSnapshot,
   getPingToken,
+  parsePingCommand,
   runMonitoringCheck,
   sendMonitorMessage,
   startMonitoring,
