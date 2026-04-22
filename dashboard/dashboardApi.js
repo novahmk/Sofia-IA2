@@ -379,27 +379,50 @@ async function checkWasenderapi() {
  * Verifica se Google Calendar está configurado e acessível
  */
 async function checkGoogleCalendar() {
-    const keyFile = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-    const calId = process.env.GOOGLE_CALENDAR_ID;
-    if (!keyFile) {
-        return { status: 'error', latencyMs: 0, detail: 'GOOGLE_SERVICE_ACCOUNT_JSON não configurado' };
+    const rawInlineJson = String(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '').trim();
+    const credentialFile = String(process.env.GOOGLE_SERVICE_ACCOUNT_FILE || '').trim();
+    const calId = process.env.GOOGLE_CALENDAR_ID || 'primary';
+
+    if (!rawInlineJson && !credentialFile) {
+        return { status: 'error', latencyMs: 0, detail: 'Credenciais do Google Calendar não configuradas' };
     }
-    if (!calId || calId.includes('seu-email')) {
-        return { status: 'warning', latencyMs: 0, detail: 'GOOGLE_CALENDAR_ID não configurado (placeholder)' };
-    }
-    // Verificar se o arquivo de credenciais existe
+
     const fs = require('fs');
     const path = require('path');
-    const credPath = path.resolve(__dirname, keyFile);
-    if (!fs.existsSync(credPath)) {
-        return { status: 'error', latencyMs: 0, detail: `Arquivo de credenciais não encontrado: ${keyFile}` };
-    }
+
     try {
-        const creds = JSON.parse(fs.readFileSync(credPath, 'utf-8'));
+        let creds;
+        let source = 'inline_json';
+
+        if (rawInlineJson) {
+            if (rawInlineJson.startsWith('{')) {
+                creds = JSON.parse(rawInlineJson);
+            } else {
+                const credPath = path.resolve(process.cwd(), rawInlineJson);
+                if (!fs.existsSync(credPath)) {
+                    return { status: 'error', latencyMs: 0, detail: `Arquivo de credenciais não encontrado: ${rawInlineJson}` };
+                }
+                creds = JSON.parse(fs.readFileSync(credPath, 'utf-8'));
+                source = rawInlineJson;
+            }
+        } else {
+            const credPath = path.resolve(process.cwd(), credentialFile);
+            if (!fs.existsSync(credPath)) {
+                return { status: 'error', latencyMs: 0, detail: `Arquivo de credenciais não encontrado: ${credentialFile}` };
+            }
+            creds = JSON.parse(fs.readFileSync(credPath, 'utf-8'));
+            source = credentialFile;
+        }
+
         if (!creds.client_email || !creds.private_key) {
             return { status: 'error', latencyMs: 0, detail: 'Credenciais inválidas (faltam client_email/private_key)' };
         }
-        return { status: 'online', latencyMs: 0, detail: `Service account: ${creds.client_email}` };
+
+        return {
+            status: 'online',
+            latencyMs: 0,
+            detail: `Service account: ${creds.client_email} | calendar: ${calId} | source: ${source}`,
+        };
     } catch (err) {
         return { status: 'error', latencyMs: 0, detail: `Erro ao ler credenciais: ${err.message}` };
     }
@@ -430,10 +453,11 @@ async function checkDatabase() {
 /**
  * Executa todos os health checks em paralelo e retorna resultado consolidado
  */
-async function runHealthChecks() {
+async function runHealthChecks(options = {}) {
+    const { force = false } = options;
     const now = Date.now();
     // Usar cache se ainda válido
-    if (_healthCache && (now - _healthCacheTime) < HEALTH_CACHE_TTL) {
+    if (!force && _healthCache && (now - _healthCacheTime) < HEALTH_CACHE_TTL) {
         return _healthCache;
     }
 

@@ -49,6 +49,21 @@ Como validar após subir o deploy:
 - Confirme `integrations.wasenderapi: true`
 - Nos logs de runtime, confirme `🧠 OpenAI: SIM` e `🧭 Router: OPENAI`
 
+## Monitoramento operacional
+
+O servidor principal expõe monitoramento ativo no próprio runtime de [whatsappExpressWebhook.js](whatsappExpressWebhook.js).
+
+- `GET /health`: executa health check real com OpenAI, gateway de mensagens, banco e Google Calendar.
+- `POST /ping`: exige `Authorization: Bearer <MONITORING_PING_TOKEN>` e envia o resultado do health para o WhatsApp de monitoramento.
+- Monitor interno: roda automaticamente a cada 1 hora e envia alerta via WhatsApp quando o sistema entra em falha critica.
+
+Variáveis relevantes:
+
+- `MONITORING_ALERT_PHONE`
+- `MONITORING_PING_TOKEN`
+- `MONITOR_INTERVAL_MS`
+- `MONITOR_ALERT_REPEAT_MS`
+
 ## Matriz Railway
 
 Arquivo de deploy atual: [railway.toml](railway.toml)

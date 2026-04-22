@@ -45,6 +45,7 @@ const leadMemory = require('./leadSystem/leadMemory');
 const eventBus = require('./eventBus');
 const selfImprovement = require('./improvement/selfImprovement');
 const messageQueue = require('./messageQueue');
+const healthMonitor = require('./healthMonitor');
 const responseCache = require('./responseCache');
 const { jaFoiProcessada, marcarComoProcessada, salvarMensagem } = require('./conversationDB');
 const { carregarHistorico, getHorasDeContextoFrio } = require('./conversationDB');
@@ -209,44 +210,98 @@ function checkIpRateLimit(ip) {
 
 // ── Rotas ──
 app.get('/', (req, res) => res.json({ status: 'ok' }));
-app.get('/health', (req, res) => {
-  const { chatHistoriesAdapter, customerIntentsAdapter } = require('./redisStateAdapter');
-  const routerMode = process.env.OPENAI_API_KEY ? 'openai' : 'heuristic';
-  const aiMode = getSofiaResponse ? 'full' : 'fallback';
-  const calendarMode = [
-    process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
-    process.env.GOOGLE_SERVICE_ACCOUNT_FILE,
-    process.env.GOOGLE_CLIENT_ID,
-  ].some(Boolean)
-    ? 'configured'
-    : 'missing';
-  res.json({
-    status: 'ok',
-    time: Date.now(),
-    uptime: Math.floor(process.uptime()),
-    nodeEnv: process.env.NODE_ENV || 'development',
-    ai: {
-      mode: aiMode,
-      available: Boolean(getSofiaResponse),
-      openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
-    },
-    router: {
-      mode: routerMode,
-      model: process.env.OPENAI_ROUTER_MODEL || 'gpt-4o-mini',
-      openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
-    },
-    integrations: {
-      wasenderapi: Boolean(process.env.WASENDERAPI_TOKEN),
-      database: Boolean(process.env.DATABASE_URL),
-      redis: Boolean(process.env.REDIS_URL),
-      calendar: {
-        mode: calendarMode,
-        calendarId: process.env.GOOGLE_CALENDAR_ID || 'primary',
+app.get('/health', async (req, res) => {
+  try {
+    const { summary } = await healthMonitor.runMonitoringCheck({ force: false, notify: false });
+    const routerMode = process.env.OPENAI_API_KEY ? 'openai' : 'heuristic';
+    const aiMode = getSofiaResponse ? 'full' : 'fallback';
+    const calendarMode = [
+      process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+      process.env.GOOGLE_SERVICE_ACCOUNT_FILE,
+      process.env.GOOGLE_CLIENT_ID,
+    ].some(Boolean)
+      ? 'configured'
+      : 'missing';
+
+    res.json({
+      status: summary.status,
+      server: summary.server,
+      openai: summary.openai,
+      messaging: summary.messaging,
+      database: summary.database,
+      calendar: summary.calendar,
+      timestamp: summary.timestamp,
+      time: Date.now(),
+      uptime: Math.floor(process.uptime()),
+      nodeEnv: process.env.NODE_ENV || 'development',
+      ai: {
+        mode: aiMode,
+        available: Boolean(getSofiaResponse),
+        openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
       },
-    },
-    queue: require('./messageQueue').getStats(),
-    cache: require('./responseCache').getStats(),
-  });
+      router: {
+        mode: routerMode,
+        model: process.env.OPENAI_ROUTER_MODEL || 'gpt-4o-mini',
+        openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+      },
+      integrations: {
+        wasenderapi: Boolean(process.env.WASENDERAPI_TOKEN),
+        database: Boolean(process.env.DATABASE_URL),
+        redis: Boolean(process.env.REDIS_URL),
+        calendar: {
+          mode: calendarMode,
+          calendarId: process.env.GOOGLE_CALENDAR_ID || 'primary',
+        },
+      },
+      monitoring: healthMonitor.getMonitoringSnapshot(),
+      services: summary.services,
+      queue: require('./messageQueue').getStats(),
+      cache: require('./responseCache').getStats(),
+    });
+  } catch (error) {
+    console.error(`❌ /health falhou: ${error.message}`);
+    res.status(500).json({
+      status: 'error',
+      server: 'ok',
+      openai: 'error',
+      timestamp: new Date().toISOString(),
+      error: error.message,
+    });
+  }
+});
+
+app.post('/ping', async (req, res) => {
+  const pingToken = healthMonitor.getPingToken();
+  if (!pingToken) {
+    return res.status(503).json({ error: 'MONITORING_PING_TOKEN não configurado' });
+  }
+
+  const authHeader = String(req.header('authorization') || '');
+  const providedToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+  if (!safeCompare(providedToken, pingToken)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const { summary } = await healthMonitor.runMonitoringCheck({ force: true, notify: false });
+    const monitorMessage = healthMonitor.formatMonitorMessage(summary, 'ping');
+    const notification = await healthMonitor.sendMonitorMessage(monitorMessage, enviarMensagem);
+
+    return res.json({
+      status: summary.status,
+      server: summary.server,
+      openai: summary.openai,
+      messaging: summary.messaging,
+      database: summary.database,
+      calendar: summary.calendar,
+      timestamp: summary.timestamp,
+      notification,
+      services: summary.services,
+    });
+  } catch (error) {
+    console.error(`❌ /ping falhou: ${error.message}`);
+    return res.status(500).json({ error: error.message });
+  }
 });
 
 app.get('/dashboard', (req, res) => {
@@ -697,8 +752,11 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`🧠 OpenAI: ${OPENAI_API_KEY ? 'SIM' : '⚠️ NÃO'}`);
   console.log(`🧭 Router: ${OPENAI_API_KEY ? 'OPENAI' : 'HEURISTIC'} (${process.env.OPENAI_ROUTER_MODEL || 'gpt-4o-mini'})`);
   console.log(`🤖 AI: ${getSofiaResponse ? 'COMPLETO (ai.js)' : 'FALLBACK (gpt-4o-mini)'}`);
+  console.log(`🩺 Monitoramento: telefone ${healthMonitor.getMonitoringSnapshot().alertPhone} | token ${healthMonitor.getPingToken() ? 'SIM' : '⚠️ NÃO'}`);
   if (!OPENAI_API_KEY) console.error('🚨 OPENAI_API_KEY ausente!');
   if (!WASENDERAPI_TOKEN) console.error('🚨 WASENDERAPI_TOKEN ausente!');
+
+  healthMonitor.startMonitoring(enviarMensagem);
 });
 
 server.on('error', (err) => {

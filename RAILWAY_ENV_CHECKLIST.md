@@ -34,6 +34,10 @@ REDIS_URL=redis://default:senha@host:6379
 WEBHOOK_VERIFY_TOKEN=seu-verify-token
 WEBHOOK_API_KEY=opcional
 JWT_SECRET=segredo-forte-opcional
+MONITORING_ALERT_PHONE=5511993521100
+MONITORING_PING_TOKEN=token-forte-monitoramento
+MONITOR_INTERVAL_MS=3600000
+MONITOR_ALERT_REPEAT_MS=3600000
 ```
 
 ## O que validar após o deploy
@@ -44,6 +48,8 @@ JWT_SECRET=segredo-forte-opcional
 4. Confirmar `integrations.wasenderapi: true`.
 5. Confirmar `integrations.database: true`.
 6. Confirmar `integrations.calendar.mode: "configured"`.
+7. Testar `POST /ping` com `Authorization: Bearer <MONITORING_PING_TOKEN>`.
+8. Confirmar recebimento de alerta no WhatsApp de monitoramento.
 
 ## Leitura rápida dos problemas mais comuns
 
