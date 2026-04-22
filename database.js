@@ -314,6 +314,45 @@ class SofiaDatabase {
         );
     }
 
+    async clearAllConversationHistory() {
+        if (!pool) {
+            return {
+                provider: 'memory',
+                conversationsDeleted: 0,
+                processedMessagesDeleted: 0,
+            };
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const conversationsResult = await client.query('DELETE FROM conversations');
+
+            let processedMessagesDeleted = 0;
+            try {
+                const processedResult = await client.query('DELETE FROM mensagens_processadas');
+                processedMessagesDeleted = processedResult.rowCount || 0;
+            } catch (error) {
+                if (error.code !== '42P01') {
+                    throw error;
+                }
+            }
+
+            await client.query('COMMIT');
+
+            return {
+                provider: 'postgresql',
+                conversationsDeleted: conversationsResult.rowCount || 0,
+                processedMessagesDeleted,
+            };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
     getStats() {
         return {
             clients: Object.keys(this.kvCache.client_memories).length,

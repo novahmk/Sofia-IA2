@@ -5,7 +5,8 @@
   "main": "whatsappExpressWebhook.js",
   "scripts": {
     "start": "node whatsappExpressWebhook.js",
-    "start:webhook": "node whatsappExpressWebhook.js"
+    "start:webhook": "node whatsappExpressWebhook.js",
+    "purge:history": "node scripts/purgeConversationHistory.js"
   },
   "engines": {
     "node": ">=18.0.0"

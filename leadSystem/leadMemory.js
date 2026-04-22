@@ -78,6 +78,35 @@ class LeadMemory {
 
     await this.updateLead(phone, { contexto_conversa: lead.contexto_conversa });
   }
+
+  async clearAllConversationHistory() {
+    const leads = db.getAll('leads') || {};
+    let clearedLeads = 0;
+
+    for (const [phone, lead] of Object.entries(leads)) {
+      if (!lead) continue;
+
+      const nextLead = { ...lead };
+      let updated = false;
+
+      if (Array.isArray(nextLead.contexto_conversa) && nextLead.contexto_conversa.length > 0) {
+        nextLead.contexto_conversa = [];
+        updated = true;
+      }
+
+      if (nextLead.resumo_conversa) {
+        nextLead.resumo_conversa = null;
+        updated = true;
+      }
+
+      if (updated) {
+        db.set('leads', phone, nextLead);
+        clearedLeads += 1;
+      }
+    }
+
+    return { clearedLeads };
+  }
 }
 
 module.exports = new LeadMemory();

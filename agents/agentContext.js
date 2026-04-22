@@ -10,6 +10,7 @@
 
 const clientMemory = require('../clientMemory');
 const { OpenAI } = require('openai');
+const { normalizeSchedulingContext } = require('./scheduling-system');
 
 let openaiClient = null;
 
@@ -40,7 +41,7 @@ class AgentContext {
    */
   analyzeIntention(userMessage, lead) {
     const phone = lead?.telefone || lead?.lead_id;
-    const memory = phone ? clientMemory.getClientMemory(phone) : null;
+    const memory = phone ? normalizeSchedulingContext(phone, clientMemory.getClientMemory(phone)) : null;
     const pendingScheduling = memory?.pendingScheduling;
 
     if (['waiting_day_preference', 'waiting_slot_selection', 'waiting_full_name'].includes(pendingScheduling?.step)) {

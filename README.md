@@ -57,6 +57,22 @@ O servidor principal expõe monitoramento ativo no próprio runtime de [whatsapp
 - `POST /ping`: exige `Authorization: Bearer <MONITORING_PING_TOKEN>` e envia o resultado do health para o WhatsApp de monitoramento.
 - Monitor interno: roda automaticamente a cada 1 hora e envia alerta via WhatsApp quando o sistema entra em falha critica.
 
+Hoje o ping lista estes sistemas do runtime:
+
+- Sofia IA (Node.js)
+- OpenAI GPT-4o
+- WASenderAPI
+- Banco de Dados
+- Google Calendar
+- Fila de Mensagens
+- Cache de Respostas
+- Redis State
+
+Limpeza total do histórico de conversa:
+
+- `npm run purge:history`
+- O comando apaga histórico completo em `conversations`, `mensagens_processadas`, `contexto_conversa` dos leads, `conversationHistory` dos estados e o bloco `conversation` do `clientMemory`.
+
 Variáveis relevantes:
 
 - `MONITORING_ALERT_PHONE`

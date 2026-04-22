@@ -1,23 +1,16 @@
 /**
  * Messaging Client — Camada de abstração para envio/recebimento de mensagens.
- * Suporta UAZAPI e WASenderAPI conforme configuração.
+ * Runtime atual usa somente WASenderAPI.
  */
 
 const https = require('https');
 
 class MessagingClient {
     constructor() {
-        this.provider = process.env.WASENDERAPI_BASE_URL ? 'wasenderapi' : 'uazapi';
-
-        if (this.provider === 'wasenderapi') {
-            this.token = process.env.WASENDERAPI_TOKEN || '';
-            this.baseUrl = (process.env.WASENDERAPI_BASE_URL || '').replace(/\/$/, '');
-            this.sendPath = '/api/send-message';
-        } else {
-            this.token = process.env.UAZAPI_TOKEN || '';
-            this.baseUrl = (process.env.UAZAPI_BASE_URL || 'https://free.uazapi.com').replace(/\/$/, '');
-            this.sendPath = '/send/text';
-        }
+        this.provider = 'wasenderapi';
+        this.token = process.env.WASENDERAPI_TOKEN || '';
+        this.baseUrl = (process.env.WASENDERAPI_BASE_URL || '').replace(/\/$/, '');
+        this.sendPath = '/api/send-message';
 
         this._parsedUrl = null;
         try {
@@ -45,14 +38,8 @@ class MessagingClient {
     }
 
     _getHeaders() {
-        if (this.provider === 'wasenderapi') {
-            return {
-                'Authorization': `Bearer ${this.token}`,
-                'Content-Type': 'application/json'
-            };
-        }
         return {
-            'token': this.token,
+            'Authorization': `Bearer ${this.token}`,
             'Content-Type': 'application/json'
         };
     }
@@ -114,7 +101,7 @@ class MessagingClient {
     }
 
     /**
-     * Envia mensagem de texto via provider configurado (UAZAPI ou WASenderAPI)
+     * Envia mensagem de texto via WASenderAPI
      */
     async sendMessage(phoneNumber, message) {
         if (!this.isConfigured()) {
@@ -123,22 +110,10 @@ class MessagingClient {
         }
 
         const phone = this.normalizePhoneNumber(phoneNumber);
-        let payload = {};
-
-        if (this.provider === 'wasenderapi') {
-            // WASenderAPI payload
-            payload = {
-                to: phone,
-                text: message,
-            };
-        } else {
-            // UAZAPI payload
-            payload = {
-                phone,
-                chatId: `${phone}@s.whatsapp.net`,
-                message,
-            };
-        }
+        const payload = {
+            to: phone,
+            text: message,
+        };
 
         const response = await this._request('POST', this.sendPath, payload);
         console.log(`📤 [${this.provider.toUpperCase()}] Mensagem para ${phone}: "${message.substring(0, 80)}..."`);
@@ -146,15 +121,14 @@ class MessagingClient {
     }
 
     /**
-     * Simula "digitando..." — UAZAPI não suporta este endpoint no free
+     * Simula "digitando..." — não implementado no runtime atual
      */
     async sendTyping(phoneNumber) {
-        // UAZAPI free não tem endpoint de presença
         return { supported: false, phoneNumber };
     }
 
     /**
-     * Para de "digitar" — UAZAPI não suporta no free
+     * Para de "digitar" — não implementado no runtime atual
      */
     async stopTyping(phoneNumber) {
         return { supported: false, phoneNumber };
@@ -173,49 +147,23 @@ class MessagingClient {
             };
         }
 
-        if (this.provider === 'wasenderapi') {
-            try {
-                // WASenderAPI simples health check
-                const statusPath = '/status';
-                const status = await this._request('GET', statusPath);
-                return {
-                    connected: true,
-                    configured: true,
-                    provider: 'wasenderapi',
-                    message: status.message || 'Conectado',
-                    status: status.status || 'online',
-                };
-            } catch (err) {
-                return {
-                    connected: false,
-                    configured: true,
-                    provider: 'wasenderapi',
-                    message: `Erro ao verificar status: ${err.message}`,
-                };
-            }
-        } else {
-            // UAZAPI status check
-            try {
-                const status = await this._request('GET', '/status');
-                const instance = status.status?.checked_instance || {};
-                return {
-                    connected: instance.connection_status === 'connected',
-                    configured: true,
-                    provider: 'uazapi',
-                    instanceName: instance.name || '',
-                    connectionStatus: instance.connection_status || 'unknown',
-                    isHealthy: instance.is_healthy || false,
-                    serverStatus: status.status?.server_status || 'unknown',
-                    message: instance.message || '',
-                };
-            } catch (err) {
-                return {
-                    connected: false,
-                    configured: true,
-                    provider: 'uazapi',
-                    message: `Erro ao verificar status: ${err.message}`,
-                };
-            }
+        try {
+            const statusPath = '/status';
+            const status = await this._request('GET', statusPath);
+            return {
+                connected: true,
+                configured: true,
+                provider: 'wasenderapi',
+                message: status.message || 'Conectado',
+                status: status.status || 'online',
+            };
+        } catch (err) {
+            return {
+                connected: false,
+                configured: true,
+                provider: 'wasenderapi',
+                message: `Erro ao verificar status: ${err.message}`,
+            };
         }
     }
 
@@ -223,20 +171,14 @@ class MessagingClient {
      * Retorna configuração atual do webhook
      */
     async getWebhookConfig() {
-        return this._request('GET', '/webhook');
+        return { supported: false, provider: this.provider };
     }
 
     /**
-     * Atualiza URL do webhook na UAZAPI
+     * Atualiza URL do webhook — não suportado neste client runtime
      */
     async setWebhook(webhookUrl) {
-        return this._request('PUT', '/webhook', {
-            url: `POST ${webhookUrl}`,
-            enabled: true,
-            events: ['messages'],
-            addUrlEvents: false,
-            addUrlTypesMessages: false,
-        });
+        return { supported: false, provider: this.provider, webhookUrl };
     }
 }
 

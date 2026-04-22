@@ -16,6 +16,9 @@ const clientMemory = require('../clientMemory');
 const conversationManager = require('../core/conversationManager');
 const auditLogger = require('../utils/auditLogger');
 const knowledgeBase = require('../knowledgeBase');
+const messageQueue = require('../messageQueue');
+const responseCache = require('../responseCache');
+const redisStateAdapter = require('../redisStateAdapter');
 
 // =====================================================
 // CACHE DE HEALTH CHECK (evita spam de requests)
@@ -208,14 +211,15 @@ function getDashboardData(rateLimits, messageQueues) {
  * Faz ping real em cada serviço externo com timeout
  */
 function getServicesStatus(perf) {
-    // Retorna status base (síncrono) — será sobrescrito pelo health check assíncrono
-    const messagingLabel = process.env.WASENDERAPI_BASE_URL ? 'WASenderAPI Chat' : 'UAZAPI WhatsApp';
     return {
         sofia: { status: 'online', label: 'Sofia IA (Node.js)', latencyMs: null, lastChecked: new Date().toISOString(), detail: `Uptime: ${formatUptime(process.uptime())}` },
         openai: { status: 'unknown', label: 'OpenAI GPT-4o', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
-        uazapi: { status: 'unknown', label: messagingLabel, latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
+        wasenderapi: { status: 'unknown', label: 'WASenderAPI', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
         calendar: { status: 'unknown', label: 'Google Calendar', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
         database: { status: 'unknown', label: 'Banco de Dados', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
+        messageQueue: { status: 'unknown', label: 'Fila de Mensagens', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
+        responseCache: { status: 'unknown', label: 'Cache de Respostas', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
+        redis: { status: 'unknown', label: 'Redis State', latencyMs: null, lastChecked: null, detail: 'Aguardando verificação...' },
     };
 }
 
@@ -285,52 +289,6 @@ async function checkOpenAI() {
 }
 
 /**
- * Verifica conexão REAL com a UAZAPI
- */
-async function checkUazapi() {
-    const token = process.env.UAZAPI_TOKEN;
-    const baseUrl = process.env.UAZAPI_BASE_URL || 'https://free.uazapi.com';
-    if (!token) {
-        return { status: 'error', latencyMs: 0, detail: 'UAZAPI_TOKEN não configurado' };
-    }
-    try {
-        const url = new URL(baseUrl);
-        const result = await httpCheck({
-            hostname: url.hostname,
-            port: url.port || (url.protocol === 'https:' ? 443 : 80),
-            path: '/status',
-            method: 'GET',
-            headers: { 'token': token }
-        }, 8000);
-        if (result.ok) {
-            let detail = '';
-            try {
-                const data = JSON.parse(result.body);
-                const inst = data.status?.checked_instance || {};
-                const connStatus = inst.connection_status || 'unknown';
-                const name = inst.name || '';
-                if (connStatus === 'connected') {
-                    detail = `Conectado${name ? ' — ' + name.trim() : ''} (${result.latencyMs}ms)`;
-                    return { status: 'online', latencyMs: result.latencyMs, detail };
-                } else if (connStatus === 'connecting') {
-                    return { status: 'warning', latencyMs: result.latencyMs, detail: `Conectando... (${result.latencyMs}ms)` };
-                } else {
-                    return { status: 'error', latencyMs: result.latencyMs, detail: `Desconectado do WhatsApp (${connStatus})` };
-                }
-            } catch (e) {
-                return { status: 'online', latencyMs: result.latencyMs, detail: `API respondeu em ${result.latencyMs}ms` };
-            }
-        }
-        if (result.statusCode === 401 || result.statusCode === 403) {
-            return { status: 'error', latencyMs: result.latencyMs, detail: 'Token inválido (401/403)' };
-        }
-        return { status: 'error', latencyMs: result.latencyMs, detail: result.detail || `Erro HTTP ${result.statusCode}` };
-    } catch (err) {
-        return { status: 'error', latencyMs: 0, detail: err.message };
-    }
-}
-
-/**
  * Verifica conexão REAL com o WASenderAPI
  */
 async function checkWasenderapi() {
@@ -373,6 +331,45 @@ async function checkWasenderapi() {
     } catch (err) {
         return { status: 'error', latencyMs: 0, detail: err.message };
     }
+}
+
+function checkMessageQueue() {
+    const stats = messageQueue.getStats();
+    return {
+        status: 'online',
+        latencyMs: 0,
+        detail: `telefones na fila=${stats.activePhonesInQueue} | usuarios ativos=${stats.activeUsers} | aguardando=${stats.waitingForSlot}`,
+    };
+}
+
+function checkResponseCache() {
+    const stats = responseCache.getStats();
+    const status = stats.backendRedis ? 'online' : 'warning';
+    const backend = stats.backendRedis ? 'Redis' : 'in-memory';
+    return {
+        status,
+        latencyMs: 0,
+        detail: `backend=${backend} | entradas=${stats.entries}/${stats.maxEntries} | hits=${stats.totalHits}`,
+    };
+}
+
+function checkRedisState() {
+    const stats = redisStateAdapter.getStatus();
+    if (process.env.REDIS_URL && !stats.redisConnected) {
+        return {
+            status: 'warning',
+            latencyMs: 0,
+            detail: 'REDIS_URL configurado, mas adapter caiu para in-memory',
+        };
+    }
+
+    return {
+        status: stats.redisConnected ? 'online' : 'warning',
+        latencyMs: 0,
+        detail: stats.redisConnected
+            ? `Redis conectado | historicos=${stats.chatHistoriesLocal} | intents=${stats.customerIntentsLocal}`
+            : `Redis indisponível | usando in-memory | historicos=${stats.chatHistoriesLocal} | intents=${stats.customerIntentsLocal}`,
+    };
 }
 
 /**
@@ -462,21 +459,25 @@ async function runHealthChecks(options = {}) {
     }
 
     const timestamp = new Date().toISOString();
-    const messagingCheck = process.env.WASENDERAPI_BASE_URL ? checkWasenderapi() : checkUazapi();
-    const [openai, messaging, calendar, database] = await Promise.all([
+    const [openai, messaging, calendar, database, queue, cache, redis] = await Promise.all([
         checkOpenAI(),
-        messagingCheck,
+        checkWasenderapi(),
         checkGoogleCalendar(),
         checkDatabase(),
+        Promise.resolve(checkMessageQueue()),
+        Promise.resolve(checkResponseCache()),
+        Promise.resolve(checkRedisState()),
     ]);
 
-    const messagingLabel = process.env.WASENDERAPI_BASE_URL ? 'WASenderAPI Chat' : 'UAZAPI WhatsApp';
     const result = {
         sofia: { status: 'online', label: 'Sofia IA (Node.js)', latencyMs: 0, lastChecked: timestamp, detail: `Uptime: ${formatUptime(process.uptime())}` },
         openai: { ...openai, label: 'OpenAI GPT-4o', lastChecked: timestamp },
-        uazapi: { ...messaging, label: messagingLabel, lastChecked: timestamp },
+        wasenderapi: { ...messaging, label: 'WASenderAPI', lastChecked: timestamp },
         calendar: { ...calendar, label: 'Google Calendar', lastChecked: timestamp },
         database: { ...database, label: 'Banco de Dados', lastChecked: timestamp },
+        messageQueue: { ...queue, label: 'Fila de Mensagens', lastChecked: timestamp },
+        responseCache: { ...cache, label: 'Cache de Respostas', lastChecked: timestamp },
+        redis: { ...redis, label: 'Redis State', lastChecked: timestamp },
     };
 
     _healthCache = result;

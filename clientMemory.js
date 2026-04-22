@@ -87,6 +87,16 @@ class ClientMemory {
         };
     }
 
+    createEmptyConversationState(firstContact = new Date().toISOString()) {
+        return {
+            total_messages: 0,
+            first_contact: firstContact,
+            topics_discussed: [],
+            questions_asked: [],
+            objections: []
+        };
+    }
+
     /**
      * Carrega memórias salvas (SQLite primeiro, fallback JSON)
      */
@@ -158,13 +168,7 @@ class ClientMemory {
                 },
 
                 // Histórico de conversa
-                conversation: {
-                    total_messages: 0,
-                    first_contact: new Date().toISOString(),
-                    topics_discussed: [],
-                    questions_asked: [],
-                    objections: []
-                },
+                conversation: this.createEmptyConversationState(new Date().toISOString()),
 
                 // Preferências de atendimento
                 preferences: {
@@ -497,6 +501,23 @@ class ClientMemory {
             lastUpdated: this.memories[phone]?.last_updated,
             hasConsent: this.memories[phone]?.lgpd?.consents?.some(c => c.active) || false
         }));
+    }
+
+    async clearAllConversationHistory() {
+        let clearedClients = 0;
+
+        for (const memory of Object.values(this.memories)) {
+            if (!memory) continue;
+            memory.conversation = this.createEmptyConversationState(memory.created_at || new Date().toISOString());
+            memory.last_updated = new Date().toISOString();
+            clearedClients += 1;
+        }
+
+        await this.saveMemories();
+
+        return {
+            clearedClients,
+        };
     }
 
     /**

@@ -3,7 +3,7 @@
  * ═══════════════════════════════════════════════════════════════
  * 
  * Servidor HTTP nativo Node.js (sem Express) que opera como:
- *   1. Webhook receiver para chat via UAZAPI
+ *   1. Webhook receiver para chat via WASenderAPI
  *   2. API REST com JWT auth para dashboard administrativo  
  *   3. WebSocket server para real-time dashboard updates
  *   4. Motor de IA conversacional (GPT-4o)
@@ -67,7 +67,7 @@ const auth = require('./auth');
 const wsManager = require('./dashboard/wsManager');
 const fs = require('fs');
 
-// Inicializa o client de mensagens (UAZAPI)
+// Inicializa o client de mensagens (WASenderAPI)
 const messaging = new MessagingClient();
 
 // Lista de números de admin autorizados a usar comandos de controle

@@ -2,6 +2,17 @@
 
 const DEFAULT_ALERT_PHONE = '5511993521100';
 
+const SERVICE_DISPLAY_ORDER = [
+  'sofia',
+  'openai',
+  'wasenderapi',
+  'database',
+  'calendar',
+  'messageQueue',
+  'responseCache',
+  'redis',
+];
+
 const monitorState = {
   started: false,
   intervalId: null,
@@ -92,35 +103,41 @@ function normalizeServiceStatus(service) {
 }
 
 function summarizeHealth(checks, timestamp = new Date().toISOString()) {
-  const messaging = checks?.uazapi || {
+  const messaging = checks?.wasenderapi || {
     status: 'error',
     detail: 'Gateway de mensagens indisponivel',
-    label: 'WhatsApp',
+    label: 'WASenderAPI',
   };
+
+  const services = checks || {};
+  const serviceStatuses = Object.fromEntries(
+    Object.entries(services).map(([serviceKey, service]) => [serviceKey, normalizeServiceStatus(service)]),
+  );
 
   const summary = {
     status: 'ok',
-    server: 'ok',
+    server: serviceStatuses.sofia || 'error',
     openai: normalizeServiceStatus(checks?.openai),
     messaging: normalizeServiceStatus(messaging),
     database: normalizeServiceStatus(checks?.database),
     calendar: normalizeServiceStatus(checks?.calendar),
     timestamp,
-    services: checks || {},
+    services,
+    serviceStatuses,
     criticalFailures: [],
   };
 
-  if (summary.openai === 'error') {
-    summary.criticalFailures.push('OpenAI');
-  }
-  if (summary.messaging === 'error') {
-    summary.criticalFailures.push(messaging.label || 'WhatsApp');
+  for (const criticalKey of ['sofia', 'openai', 'wasenderapi']) {
+    const service = services?.[criticalKey];
+    if (normalizeServiceStatus(service) === 'error') {
+      summary.criticalFailures.push(service?.label || criticalKey);
+    }
   }
 
   if (summary.criticalFailures.length > 0) {
     summary.status = 'error';
   } else if (
-    [summary.openai, summary.messaging, summary.database, summary.calendar].some(
+    Object.values(serviceStatuses).some(
       (status) => status === 'warning' || status === 'error',
     )
   ) {
@@ -150,25 +167,43 @@ function formatServiceLine(label, status, detail) {
 function buildAlertKey(summary) {
   return JSON.stringify({
     status: summary.status,
-    openai: summary.services?.openai?.detail || summary.openai,
-    messaging: summary.services?.uazapi?.detail || summary.messaging,
+    services: Object.fromEntries(
+      Object.entries(summary.services || {}).map(([serviceKey, service]) => [
+        serviceKey,
+        {
+          status: service?.status || 'unknown',
+          detail: service?.detail || '',
+        },
+      ]),
+    ),
+  });
+}
+
+function getVisibleServices(summary) {
+  const services = summary.services || {};
+  const knownKeys = SERVICE_DISPLAY_ORDER.filter((serviceKey) => services[serviceKey]);
+  const extraKeys = Object.keys(services).filter((serviceKey) => !SERVICE_DISPLAY_ORDER.includes(serviceKey));
+  return [...knownKeys, ...extraKeys].map((serviceKey) => {
+    const service = services[serviceKey] || {};
+    return {
+      key: serviceKey,
+      label: service.label || serviceKey,
+      status: summary.serviceStatuses?.[serviceKey] || normalizeServiceStatus(service),
+      detail: service.detail || 'Sem detalhe',
+    };
   });
 }
 
 function formatMonitorMessage(summary, kind = 'alert') {
-  const serverDetail = summary.services?.sofia?.detail || 'Processo ativo';
-  const openaiDetail = summary.services?.openai?.detail || 'Sem detalhe';
-  const messagingDetail = summary.services?.uazapi?.detail || 'Sem detalhe';
-  const databaseDetail = summary.services?.database?.detail || 'Sem detalhe';
-  const calendarDetail = summary.services?.calendar?.detail || 'Sem detalhe';
+  const serviceLines = getVisibleServices(summary).map((service) => (
+    formatServiceLine(service.label, service.status, service.detail)
+  ));
 
   if (kind === 'recovery') {
     return [
       '✅ SOFIA IA RECUPERADA',
       `${getStatusEmoji('ok')} Status geral: OK`,
-      formatServiceLine('Servidor', summary.server, serverDetail),
-      formatServiceLine('OpenAI', summary.openai, openaiDetail),
-      formatServiceLine('WhatsApp', summary.messaging, messagingDetail),
+      ...serviceLines,
       `🕒 Hora: ${summary.timestamp}`,
     ].join('\n');
   }
@@ -177,11 +212,7 @@ function formatMonitorMessage(summary, kind = 'alert') {
     return [
       '🩺 PING SOFIA IA',
       `${getStatusEmoji(summary.status)} Status geral: ${formatStatusLabel(summary.status)}`,
-      formatServiceLine('Servidor', summary.server, serverDetail),
-      formatServiceLine('OpenAI', summary.openai, openaiDetail),
-      formatServiceLine('WhatsApp', summary.messaging, messagingDetail),
-      formatServiceLine('Banco', summary.database, databaseDetail),
-      formatServiceLine('Agenda', summary.calendar, calendarDetail),
+      ...serviceLines,
       `🕒 Hora: ${summary.timestamp}`,
     ].join('\n');
   }
@@ -189,11 +220,7 @@ function formatMonitorMessage(summary, kind = 'alert') {
   return [
     '🚨 ALERTA SOFIA IA',
     `${getStatusEmoji(summary.status)} Status geral: ${formatStatusLabel(summary.status)}`,
-    formatServiceLine('Servidor', summary.server, serverDetail),
-    formatServiceLine('OpenAI', summary.openai, openaiDetail),
-    formatServiceLine('WhatsApp', summary.messaging, messagingDetail),
-    formatServiceLine('Banco', summary.database, databaseDetail),
-    formatServiceLine('Agenda', summary.calendar, calendarDetail),
+    ...serviceLines,
     `🕒 Hora: ${summary.timestamp}`,
   ].join('\n');
 }

@@ -265,6 +265,25 @@ ${state.humanTakeoverTime ? `Modo Humano desde: ${new Date(state.humanTakeoverTi
         console.log(`🔄 Conversa resetada para ${phoneNumber}`);
     }
 
+    async clearAllConversationHistory() {
+        let clearedConversations = 0;
+
+        for (const state of Object.values(this.states)) {
+            if (!state) continue;
+            state.messageCount = 0;
+            state.firstMessageTime = Date.now();
+            state.lastMessageTime = Date.now();
+            state.conversationHistory = [];
+            clearedConversations += 1;
+        }
+
+        await this.saveStates();
+
+        return {
+            clearedConversations,
+        };
+    }
+
     /**
      * Cleanup ao encerrar
      */

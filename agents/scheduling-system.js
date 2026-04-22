@@ -117,8 +117,63 @@ function normalizeMessage(message) {
     .replace(/[\u0300-\u036f]/g, '');
 }
 
+function getPendingSchedulingTtlMs(step) {
+  if (step === 'pending_confirmation') {
+    return 24 * 60 * 60 * 1000;
+  }
+
+  return 6 * 60 * 60 * 1000;
+}
+
 function getClientContext(phone) {
   return clientMemory.getClientMemory(phone) || {};
+}
+
+function normalizeSchedulingContext(phone, memory = getClientContext(phone)) {
+  const pendingScheduling = memory?.pendingScheduling;
+  if (!pendingScheduling?.step) {
+    return memory;
+  }
+
+  const reasons = [];
+  const lastRequestAt = Date.parse(
+    pendingScheduling.lastRequestTime || pendingScheduling.updatedAt || pendingScheduling.createdAt || '',
+  );
+
+  if (
+    pendingScheduling.step === 'waiting_slot_selection' &&
+    (!Array.isArray(pendingScheduling.availableSlots) || pendingScheduling.availableSlots.length === 0)
+  ) {
+    reasons.push('empty_available_slots');
+  }
+
+  if (pendingScheduling.step === 'waiting_full_name' && !pendingScheduling.requestedSlot) {
+    reasons.push('missing_requested_slot');
+  }
+
+  if (pendingScheduling.step === 'pending_confirmation' && !pendingScheduling.eventId) {
+    reasons.push('missing_event_id');
+  }
+
+  if (Number.isFinite(lastRequestAt) && (Date.now() - lastRequestAt) > getPendingSchedulingTtlMs(pendingScheduling.step)) {
+    reasons.push('expired');
+  }
+
+  if (reasons.length === 0) {
+    return memory;
+  }
+
+  memory.pendingScheduling = null;
+  memory.last_updated = new Date().toISOString();
+  const saveAttempt = clientMemory.saveMemories();
+  if (saveAttempt?.catch) {
+    saveAttempt.catch((error) => {
+      console.warn(`⚠️ [SchedulingContext] Falha ao limpar contexto de ${phone}: ${error.message}`);
+    });
+  }
+
+  console.log(`🧹 [SchedulingContext] Contexto de agendamento limpo para ${phone}: ${reasons.join(', ')}`);
+  return memory;
 }
 
 function wantsAlternativeSlots(message) {
@@ -652,7 +707,7 @@ class NaturalSlotParser {
 class SchedulingManagerClass {
   async processScheduling(phone, name, userMessage) {
     try {
-      const clientContext = getClientContext(phone);
+      const clientContext = normalizeSchedulingContext(phone, getClientContext(phone));
       const pendingScheduling = clientContext.pendingScheduling || {};
       const providedName = extractProvidedName(userMessage, pendingScheduling.step === 'waiting_full_name');
       if (providedName) {
@@ -838,6 +893,26 @@ class SchedulingManagerClass {
       return {
         success: false,
         message: MESSAGE_TEMPLATES.askOtherPreferredDay,
+      };
+    }
+
+    if (filteredSlots.length === 0) {
+      await saveClientContext(phone, {
+        pendingScheduling: {
+          ...pendingScheduling,
+          availableSlots: [],
+          lastRequestTime: new Date().toISOString(),
+          preferredDate: extraction.suggestedDate || null,
+          step: 'waiting_day_preference',
+        },
+      });
+
+      return {
+        success: false,
+        message: extraction.suggestedDate
+          ? MESSAGE_TEMPLATES.askOtherPreferredDay
+          : MESSAGE_TEMPLATES.askPreferredDay(name || 'tudo bem'),
+        availableSlots: [],
       };
     }
 
@@ -1109,6 +1184,7 @@ module.exports = {
   SchedulingIntentionAnalyzer,
   BusinessHoursManager,
   NaturalSlotParser,
+  normalizeSchedulingContext,
   SchedulingManager,
   SchedulingReminders,
   MESSAGE_TEMPLATES,
