@@ -20,15 +20,23 @@ const BUSINESS_CONFIG = {
 const MESSAGE_TEMPLATES = {
   askDateTime: (name) => `Ótimo, ${name}! 😊
 
-Para agendar sua avaliação capilar, preciso de algumas informações:
+Para agendar sua avaliação capilar, me diga primeiro:
 
-1️⃣ Qual dia você prefere? (próximas duas semanas)
-2️⃣ Que horário combina melhor? (comercial: 8h-18h)
+1️⃣ Qual dia você prefere? (ex.: amanhã, quinta, próxima semana)
 
-Ou posso sugerir horários disponíveis para você! 📅
-Qual prefere?`,
+Depois eu vejo os horários reais desse dia para você. 📅`,
+
+  askPreferredDay: (name) => `Perfeito, ${name || 'tudo bem'}! 📅
+
+Qual dia você prefere para a sua avaliação capilar?
+
+Pode me responder algo como: *amanhã*, *quinta-feira* ou *próxima semana*.`,
 
   showAvailable: (slots) => {
+    if (!slots || slots.length === 0) {
+      return 'Não encontrei horários livres nessa opção agora. Se quiser, me diga outro dia de preferência que eu verifico para você.';
+    }
+
     const formatNatural = (slot) => {
       const date = new Date(slot.start);
       return date.toLocaleString('pt-BR', {
@@ -42,6 +50,10 @@ Qual prefere?`,
 
     if (slots.length === 2) {
       return `Encontrei dois horários disponíveis! 📅\n\n*${formatNatural(slots[0])}* ou *${formatNatural(slots[1])}*\n\nQual prefere? 😊`;
+    }
+
+    if (slots.length === 1) {
+      return `Encontrei este horário disponível! 📅\n\n*${formatNatural(slots[0])}*\n\nSe quiser, posso verificar outro dia também. 😊`;
     }
 
     const opcoes = slots.slice(0, 3).map((slot) => `• *${formatNatural(slot)}*`).join('\n');
@@ -77,6 +89,10 @@ Qual prefere?`,
 
   rescheduling: (name) => `Claro, ${name}! Sem problema! 😊\n\nVou buscar horários disponíveis novamente...\n\nQue dia/hora combina melhor com você agora?`,
 
+  askOtherPreferredDay: 'Não encontrei horários livres nesse dia. Qual outro dia você prefere? Posso verificar para você.',
+
+  askOtherTimePreference: (slots) => `Tenho estas outras opções para você:\n\n${MESSAGE_TEMPLATES.showAvailable(slots)}`,
+
   needConfirmation: (name, dateTime) => {
     const date = new Date(dateTime);
     const formatted = date.toLocaleString('pt-BR', {
@@ -100,6 +116,14 @@ function normalizeMessage(message) {
 
 function getClientContext(phone) {
   return clientMemory.getClientMemory(phone) || {};
+}
+
+function wantsAlternativeSlots(message) {
+  const msg = normalizeMessage(message);
+  return [
+    'outro horario', 'outros horarios', 'outro horario?', 'tem outro horario',
+    'tem outros horarios', 'mais tarde', 'mais cedo', 'outra opcao', 'outras opcoes',
+  ].some((term) => msg.includes(term));
 }
 
 function isMeaningfulName(name) {
@@ -399,6 +423,46 @@ class BusinessHoursManager {
     return slots;
   }
 
+  static async getAvailableSlotsForDate(dateString, count = 2, offset = 0) {
+    if (!dateString) return [];
+
+    const slots = [];
+    const [year, month, day] = dateString.split('-').map(Number);
+    const cursor = new Date(year, month - 1, day);
+    const [openHour, openMinute] = BUSINESS_CONFIG.openTime.split(':').map(Number);
+    const [closeHour, closeMinute] = BUSINESS_CONFIG.closeTime.split(':').map(Number);
+
+    cursor.setHours(openHour, openMinute, 0, 0);
+
+    if (BUSINESS_CONFIG.excludeDays.includes(cursor.getDay())) {
+      return [];
+    }
+
+    const daySlots = [];
+    while (cursor.getHours() < closeHour || (cursor.getHours() === closeHour && cursor.getMinutes() < closeMinute)) {
+      const start = new Date(cursor);
+      const end = new Date(start.getTime() + BUSINESS_CONFIG.slotDuration * 60000);
+
+      if (!this.isBusinessHour(start) || end.getHours() > closeHour || (end.getHours() === closeHour && end.getMinutes() > closeMinute)) {
+        cursor.setMinutes(cursor.getMinutes() + BUSINESS_CONFIG.slotDuration + BUSINESS_CONFIG.bufferMinutes);
+        continue;
+      }
+
+      const isAvailable = await calendar.isTimeAvailable(start, end);
+      if (isAvailable) {
+        daySlots.push({
+          start: start.toISOString(),
+          end: end.toISOString(),
+          label: this.formatSlot(start),
+        });
+      }
+
+      cursor.setMinutes(cursor.getMinutes() + BUSINESS_CONFIG.slotDuration + BUSINESS_CONFIG.bufferMinutes);
+    }
+
+    return daySlots.slice(offset, offset + count);
+  }
+
   static async findRequestedSlot(suggestedDate, suggestedTime) {
     if (!suggestedDate || !suggestedTime) {
       return null;
@@ -536,7 +600,7 @@ class SchedulingManagerClass {
         return this.confirmAndCreateEvent(phone, resolveKnownName(phone, providedName, name), pendingScheduling.requestedSlot, true);
       }
 
-      if (!intentAnalysis.hasIntent && pendingScheduling.step !== 'waiting_slot_selection') {
+      if (!intentAnalysis.hasIntent && !['waiting_slot_selection', 'waiting_day_preference'].includes(pendingScheduling.step)) {
         return { success: false, message: MESSAGE_TEMPLATES.askDateTime(resolvedName || 'tudo bem'), intent: null };
       }
 
@@ -564,6 +628,13 @@ class SchedulingManagerClass {
   async handleScheduling(phone, name, message, pendingScheduling) {
     const extraction = SchedulingIntentionAnalyzer.extractDateTime(message);
 
+    if (pendingScheduling.step === 'waiting_day_preference' && !extraction.suggestedDate) {
+      return {
+        success: false,
+        message: MESSAGE_TEMPLATES.askPreferredDay(name || 'tudo bem'),
+      };
+    }
+
     if (extraction.suggestedDate && extraction.suggestedTime) {
       const requestedSlot = await BusinessHoursManager.findRequestedSlot(
         extraction.suggestedDate,
@@ -576,6 +647,33 @@ class SchedulingManagerClass {
     }
 
     if (pendingScheduling.step === 'waiting_slot_selection' && pendingScheduling.availableSlots) {
+      if (wantsAlternativeSlots(message) && pendingScheduling.preferredDate) {
+        const nextOffset = (pendingScheduling.offeredOffset || 0) + 2;
+        const nextSlots = await BusinessHoursManager.getAvailableSlotsForDate(pendingScheduling.preferredDate, 2, nextOffset);
+
+        if (nextSlots.length === 0) {
+          return {
+            success: false,
+            message: MESSAGE_TEMPLATES.askOtherPreferredDay,
+          };
+        }
+
+        await saveClientContext(phone, {
+          pendingScheduling: {
+            ...pendingScheduling,
+            availableSlots: nextSlots,
+            offeredOffset: nextOffset,
+            step: 'waiting_slot_selection',
+          },
+        });
+
+        return {
+          success: false,
+          message: MESSAGE_TEMPLATES.askOtherTimePreference(nextSlots),
+          availableSlots: nextSlots,
+        };
+      }
+
       if (extraction.suggestedDate || extraction.suggestedTime) {
         const matchingPendingSlots = pendingScheduling.availableSlots.filter((slot) => {
           const slotDate = new Date(slot.start);
@@ -615,7 +713,25 @@ class SchedulingManagerClass {
       return this.confirmAndCreateEvent(phone, name, pendingScheduling.availableSlots[slotIndex]);
     }
 
-    const availableSlots = await BusinessHoursManager.getAvailableSlots();
+    if (!extraction.suggestedDate && !extraction.suggestedTime) {
+      await saveClientContext(phone, {
+        pendingScheduling: {
+          ...pendingScheduling,
+          lastRequestTime: new Date().toISOString(),
+          step: 'waiting_day_preference',
+        },
+      });
+
+      return {
+        success: false,
+        message: MESSAGE_TEMPLATES.askPreferredDay(name || 'tudo bem'),
+      };
+    }
+
+    const availableSlots = extraction.suggestedDate
+      ? await BusinessHoursManager.getAvailableSlotsForDate(extraction.suggestedDate, 2, 0)
+      : await BusinessHoursManager.getAvailableSlots(2);
+
     const filteredSlots = availableSlots.filter((slot) => {
       const slotDate = new Date(slot.start);
       let matches = true;
@@ -629,23 +745,40 @@ class SchedulingManagerClass {
       return matches;
     });
 
-    if ((extraction.suggestedDate || extraction.suggestedTime) && filteredSlots.length > 0) {
+    if (extraction.suggestedDate && extraction.suggestedTime && filteredSlots.length > 0) {
       return this.confirmAndCreateEvent(phone, name, filteredSlots[0]);
+    }
+
+    if (extraction.suggestedDate && filteredSlots.length === 0) {
+      await saveClientContext(phone, {
+        pendingScheduling: {
+          ...pendingScheduling,
+          lastRequestTime: new Date().toISOString(),
+          step: 'waiting_day_preference',
+        },
+      });
+
+      return {
+        success: false,
+        message: MESSAGE_TEMPLATES.askOtherPreferredDay,
+      };
     }
 
     await saveClientContext(phone, {
       pendingScheduling: {
         ...pendingScheduling,
-        availableSlots,
+        availableSlots: filteredSlots,
         lastRequestTime: new Date().toISOString(),
+        preferredDate: extraction.suggestedDate || null,
+        offeredOffset: 0,
         step: 'waiting_slot_selection',
       },
     });
 
     return {
       success: false,
-      message: MESSAGE_TEMPLATES.showAvailable(availableSlots),
-      availableSlots,
+      message: MESSAGE_TEMPLATES.showAvailable(filteredSlots),
+      availableSlots: filteredSlots,
     };
   }
 
@@ -763,11 +896,11 @@ class SchedulingManagerClass {
       appointment.reason = 'rescheduled';
     }
 
-    const availableSlots = await BusinessHoursManager.getAvailableSlots();
+    const availableSlots = await BusinessHoursManager.getAvailableSlots(2);
     await saveClientContext(phone, {
       activeScheduling: null,
       pendingScheduling: {
-        step: 'waiting_slot_selection',
+        step: 'waiting_day_preference',
         lastRequestTime: new Date().toISOString(),
         availableSlots,
       },
@@ -775,7 +908,7 @@ class SchedulingManagerClass {
 
     return {
       success: false,
-      message: `${MESSAGE_TEMPLATES.rescheduling(name)}\n\n${MESSAGE_TEMPLATES.showAvailable(availableSlots)}`,
+      message: `${MESSAGE_TEMPLATES.rescheduling(name)}\n\n${MESSAGE_TEMPLATES.askPreferredDay(name)}`,
       availableSlots,
     };
   }

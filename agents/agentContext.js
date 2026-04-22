@@ -115,7 +115,7 @@ class AgentContext {
     const memory = phone ? clientMemory.getClientMemory(phone) : null;
     const pendingScheduling = memory?.pendingScheduling;
 
-    if (pendingScheduling?.step === 'waiting_slot_selection') {
+    if (['waiting_day_preference', 'waiting_slot_selection', 'waiting_full_name'].includes(pendingScheduling?.step)) {
       return { type: 'scheduling', agent: 'administrative', entities: {} };
     }
 

@@ -1,7 +1,7 @@
 /**
  * migrations.js — Cria todas as tabelas no PostgreSQL
  * Execute UMA vez após o deploy: node migrations.js
- * Depois o start command volta para: node index.js
+ * Em produção, o servidor principal roda com: node whatsappExpressWebhook.js
  */
 
 require('dotenv').config();
@@ -12,7 +12,19 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false },
 });
 
+let migrationRunPromise = null;
+let poolClosed = false;
+
+async function closePoolOnce() {
+    if (poolClosed) return;
+    poolClosed = true;
+    await pool.end();
+}
+
 async function runMigrations() {
+    if (migrationRunPromise) return migrationRunPromise;
+
+    migrationRunPromise = (async () => {
     const client = await pool.connect();
 
     try {
@@ -164,17 +176,22 @@ async function runMigrations() {
         }
 
         console.log('✅ Índices criados\n');
-        console.log('🎉 Migrations concluídas! Volte o Start Command para: node index.js');
+        console.log('🎉 Migrations concluídas! Start Command: node whatsappExpressWebhook.js');
 
     } finally {
         client.release();
-        await pool.end();
+        await closePoolOnce();
     }
+    })();
+
+    return migrationRunPromise;
 }
 
-runMigrations().catch(err => {
-    console.error('❌ Erro nas migrations:', err.message);
-    process.exit(1);
-});
+if (require.main === module) {
+    runMigrations().catch(err => {
+        console.error('❌ Erro nas migrations:', err.message);
+        process.exit(1);
+    });
+}
 
 module.exports = { runMigrations };
