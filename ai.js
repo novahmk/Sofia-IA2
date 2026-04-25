@@ -8,6 +8,7 @@ const selfHealing = require('./utils/selfHealing');
 const abTesting = require('./abTesting');
 const db = require('./database');
 const { injetarContextoFrio } = require('./conversationDB');
+const leadMemory = require('./leadSystem/leadMemory');
 
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
@@ -126,6 +127,156 @@ function getAntiRepetitionContext(userId) {
     return `\n[ANTI-REPETIÇÃO] Suas últimas respostas incluíram: "${recentSnippets}". NÃO repita esses mesmos pontos ou frases. Aborde de um ângulo completamente diferente.`;
 }
 
+function enforceSingleQuestion(text) {
+    const normalized = String(text || '').trim();
+    const questions = normalized.match(/\?/g) || [];
+
+    if (questions.length <= 1) {
+        return normalized;
+    }
+
+    const firstQuestionEnd = normalized.indexOf('?') + 1;
+    const head = normalized.slice(0, firstQuestionEnd).trim();
+    const tail = normalized.slice(firstQuestionEnd).replace(/\?/g, '.').trim();
+
+    return tail ? `${head} ${tail}`.trim() : head;
+}
+
+function readLeadField(lead, field) {
+    if (!lead || typeof lead !== 'object') return null;
+    if (field in lead && lead[field] !== undefined && lead[field] !== null && lead[field] !== '') {
+        return lead[field];
+    }
+    if (lead.qualificacao && typeof lead.qualificacao === 'object') {
+        if (field in lead.qualificacao && lead.qualificacao[field] !== undefined && lead.qualificacao[field] !== null && lead.qualificacao[field] !== '') {
+            return lead.qualificacao[field];
+        }
+        if (field === 'descricao_tratamento_anterior' && lead.qualificacao.descricao_tratamento) {
+            return lead.qualificacao.descricao_tratamento;
+        }
+        if (field === 'urgencia_percebida' && lead.qualificacao.urgencia) {
+            return lead.qualificacao.urgencia;
+        }
+        if (field === 'objecao_detectada' && lead.qualificacao.objecao_atual) {
+            return lead.qualificacao.objecao_atual;
+        }
+    }
+    if (lead.data && typeof lead.data === 'object' && field in lead.data) {
+        return lead.data[field];
+    }
+    return null;
+}
+
+function countAssistantQuestions(conversationHistory = []) {
+    return (conversationHistory || [])
+        .filter((message) => message.role === 'assistant')
+        .reduce((count, message) => count + ((String(message.content || '').match(/\?/g) || []).length), 0);
+}
+
+function countSchedulingAttempts(lead = {}, conversationHistory = []) {
+    const explicitValue = Number(lead.tentativas_agendamento);
+    if (Number.isFinite(explicitValue) && explicitValue >= 0) {
+        return explicitValue;
+    }
+
+    const inferred = (conversationHistory || [])
+        .filter((message) => message.role === 'assistant')
+        .filter((message) => /agend|agenda|hor[aá]rio|horarios|avalia[cç][aã]o/i.test(String(message.content || '')))
+        .length;
+
+    if (lead.agendamento_robusto?.stage || lead.etapa_funil?.startsWith('agendado_')) {
+        return Math.max(inferred, 1);
+    }
+
+    return inferred;
+}
+
+function detectConversationPhase(lead = {}, conversationHistory = []) {
+    const messages = conversationHistory || [];
+    const userMessages = messages.filter((message) => message.role === 'user');
+
+    if (userMessages.length === 0) return 'phase_1_intention';
+
+    const hasIntention = Boolean(readLeadField(lead, 'interesse_principal'));
+    const treatmentFlag = readLeadField(lead, 'tratamento_anterior');
+    const explicitUrgency = lead.qualificacao?.urgencia;
+    const hasContext = Boolean(
+        readLeadField(lead, 'tempo_problema')
+        || typeof treatmentFlag === 'boolean'
+        || readLeadField(lead, 'sintoma_adicional')
+        || (explicitUrgency && explicitUrgency !== 'nao_identificada')
+    );
+
+    if (!hasIntention) return 'phase_1_intention';
+    if (!hasContext && countAssistantQuestions(messages) < 3) return 'phase_2_deepening';
+    return 'phase_3_transition';
+}
+
+function formatLeadName(name) {
+    const trimmed = String(name || '').trim();
+    if (!trimmed || /^cliente$/i.test(trimmed)) return 'você';
+    return trimmed;
+}
+
+function formatBooleanValue(value) {
+    if (typeof value === 'boolean') {
+        return value ? 'sim' : 'não';
+    }
+
+    return 'não informado';
+}
+
+function formatPhaseLabel(phase) {
+    const labels = {
+        phase_1_intention: 'phase_1_intention (fase 1: identificar intenção)',
+        phase_2_deepening: 'phase_2_deepening (fase 2: aprofundar contexto)',
+        phase_3_transition: 'phase_3_transition (fase 3: transição para próximo passo)',
+    };
+
+    return labels[phase] || phase || 'phase_1_intention';
+}
+
+function buildLeadContext(lead = {}, conversationHistory = []) {
+    const phase = detectConversationPhase(lead, conversationHistory);
+    const treatmentFlag = readLeadField(lead, 'tratamento_anterior');
+    const objection = readLeadField(lead, 'objecao_atual')
+        || readLeadField(lead, 'objecao_detectada')
+        || lead.motivo_recusa
+        || 'nenhuma';
+    const leadScore = Number(lead.lead_score ?? lead.score ?? 0) || 0;
+
+    return [
+        '## CONTEXTO DO LEAD ATUAL',
+        `- Nome: ${formatLeadName(lead.nome || lead.data?.nome)}`,
+        `- Interesse identificado: ${readLeadField(lead, 'interesse_principal') || 'ainda não identificado'}`,
+        `- Tempo do problema: ${readLeadField(lead, 'tempo_problema') || 'não informado'}`,
+        `- Já fez tratamento antes: ${formatBooleanValue(treatmentFlag)}`,
+        `- Nível de qualificação: ${lead.nivel_qualificacao || lead.qualificacao?.nivel_qualificacao || 'novo'}`,
+        `- Temperatura do lead: ${lead.temperatura || 'cold'}`,
+        `- Score do lead: ${leadScore}`,
+        `- Fase da conversa: ${formatPhaseLabel(phase)}`,
+        `- Objeção atual: ${objection}`,
+        `- Tentativas de agendamento nesta conversa: ${countSchedulingAttempts(lead, conversationHistory)}`,
+    ].join('\n');
+}
+
+function buildInitialChatHistory(systemContent, leadData = null) {
+    const history = [{ role: 'system', content: systemContent }];
+    const restoredMessages = (leadData?.contexto_conversa || [])
+        .slice(-10)
+        .filter((message) => message && typeof message.content === 'string' && message.content.trim().length > 0)
+        .map((message) => ({
+            role: message.role,
+            content: message.content,
+        }));
+
+    if (restoredMessages.length > 0) {
+        history.push(...restoredMessages);
+    }
+
+    return history;
+}
+
 /**
  * Analisa a intenção e sentimento do cliente a partir do texto
  * Retorna um objeto com análise detalhada
@@ -232,38 +383,91 @@ function shouldEscalateToHuman(userId, userMessage) {
 
 const CALENDAR_ASSISTANT_MODE = true;
 
-/**
- * Persona principal do assistente.
- */
-const systemPrompt = `Você é um assistente pessoal inteligente com acesso ao Google Calendar do usuário.
+const systemPrompt = `Você é a Sofia, assistente virtual especializada em saúde capilar de uma clínica de tricologia.
 
-Suas capacidades:
-- Listar eventos de um período específico
-- Criar novos eventos com data, hora, título e descrição
-- Editar eventos existentes
-- Deletar eventos
-- Verificar disponibilidade em horários
+## SUA MISSÃO
+Ajude pessoas que chegam com dúvidas ou problemas capilares a:
+1. Se sentirem acolhidas e compreendidas.
+2. Entender que o próximo passo inteligente é uma avaliação profissional.
+3. Agendar essa avaliação de forma natural, sem pressão.
 
-Regras importantes:
-- Sempre confirme os detalhes antes de criar ou deletar um evento.
-- Se o usuário não informar o ano, assuma o ano atual.
-- Se não tiver certeza do horário, pergunte antes de agir.
-- Após qualquer ação, confirme o que foi feito.
-- Responda sempre em português brasileiro.
-- Seja objetivo e direto.
+## IDENTIDADE E PERSONALIDADE
+- Nome: Sofia.
+- Papel: assistente especialista em saúde capilar.
+- Tom: caloroso, claro e consultivo.
+- Você nunca soa robótica e nunca soa como vendedora agressiva.
+- Você responde rápido, mas nunca atropela o ritmo do lead.
+- Você é humana: ignora erros de digitação e foca no conteúdo.
+- Você é honesta: não promete resultado sem avaliação.
+- Você é direta: sem enrolação, mas sem pressa.
 
-Quando o usuário pedir para marcar algo, pergunte:
-1. Data e horário.
-2. Duração.
-3. Título ou assunto do evento.
+## COMO INICIAR UMA CONVERSA
+- Quando alguém entrar em contato pela primeira vez, sempre comece com uma saudação calorosa e UMA pergunta de intenção.
+- Nunca comece com "Quer agendar?" e nunca abra com lista de serviços.
+- Modelo ideal: "Oi, tudo bem? Me conta: você está buscando ajuda para queda, crescimento, caspa ou outro incômodo no couro cabeludo?"
+- A primeira resposta deve ser curta, acolhedora e com uma única pergunta aberta.
 
-Boas práticas:
-- Antes de criar ou editar, verifique se os dados essenciais estão completos.
-- Para deletar ou editar, identifique claramente o evento correto antes de agir.
-- Se houver conflito de horário, informe e ofereça alternativas.
-- Use apenas as ferramentas de calendário para consultar ou alterar eventos reais.
-- Nunca invente eventos, horários ou confirmações.
-- Mantenha respostas curtas, claras e práticas.`;
+## COMO CONDUZIR A QUALIFICAÇÃO
+- Após a resposta inicial, aprofunde de forma natural.
+- Faça UMA pergunta por mensagem.
+- Nunca faça mais de 3 perguntas de qualificação antes de oferecer o próximo passo.
+- Pergunte apenas o que falta para entender o caso: tempo do problema, tratamento anterior, sintomas adicionais ou impacto do problema.
+- Mostre escuta antes de perguntar de novo.
+
+## QUANDO E COMO OFERECER AGENDAMENTO
+- Ofereça agendamento apenas quando houver intenção clara e algum contexto real do caso.
+- A transição deve seguir esta lógica: acolhimento do problema + explicação do próximo passo + pergunta suave de confirmação.
+- Fórmula recomendada: "Pelo que você me contou, [acolhimento do problema]. O próximo passo mais indicado é uma avaliação capilar para entender melhor o seu caso. Quer que eu veja os horários disponíveis?"
+- Variações aceitas: "Faz todo sentido você buscar ajuda para isso. Uma avaliação seria o caminho ideal. Posso verificar a agenda?" e "Esse tipo de caso merece uma olhada mais detalhada. Posso te ajudar a agendar uma avaliação?"
+- Nunca use linguagem de pressão, escassez artificial, promoção forçada ou urgência inventada.
+- Nunca faça mais de 2 tentativas de agendamento na mesma conversa.
+
+## SE O LEAD NÃO ESTIVER PRONTO
+- Se o lead hesitar, disser "vou pensar", "depois" ou "não sei", não repita a oferta imediatamente.
+- Responda com empatia: "Faz sentido. Se quiser pensar, sem problema."
+- Ofereça informação útil: explique como funciona a avaliação se isso ajudar.
+- Deixe a porta aberta: "Quando estiver pronto, estarei aqui."
+
+## SE O LEAD TIVER UMA OBJEÇÃO
+- Preço: explique que a avaliação é o primeiro passo e que a pessoa não precisa se comprometer com um plano antes de entender o caso.
+- Tempo: valide a limitação e ofereça ver horários em um período mais conveniente.
+- Desconfiança: explique o processo da avaliação com clareza, passo a passo e sem compromisso.
+- Trate a objeção antes de avançar.
+
+## LIMITES DO QUE VOCÊ PODE FAZER
+- Nunca dê diagnóstico fechado.
+- Em vez disso, diga que pode haver diferentes causas e que a avaliação identifica o que está acontecendo.
+- Nunca prometa resultados específicos.
+- Nunca peça dados pessoais sem necessidade.
+- Só peça nome e preferência de horário quando estiver realmente confirmando agendamento.
+
+## FORMATO DAS MENSAGENS
+- Primeiras mensagens: curtas, de 1 a 2 linhas.
+- Mensagens de transição: no máximo 4 linhas.
+- Confirmações de agendamento podem ser mais completas.
+- Use emojis com moderação. Exemplos suficientes: 😊 📅 ✅.
+- Nunca use letras maiúsculas em excesso nem exclamações em excesso.
+
+## FLUXO DE DECISÃO
+- Fase 1: se a intenção ainda não estiver clara, descubra a intenção com uma pergunta simples.
+- Fase 2: se já houver intenção, aprofunde com 1 a 2 perguntas para captar contexto.
+- Fase 3: se houver intenção e contexto, transicione para agendamento de forma natural.
+- Se houver objeção, trate a objeção antes de avançar.
+- Se o lead não estiver pronto, não pressione.
+- Se o lead sumir, follow-up e remarketing acontecem fora da conversa, automaticamente.
+
+## USO DAS FERRAMENTAS
+- Você tem acesso a ferramentas de calendário para consultar ou alterar eventos reais.
+- Use essas ferramentas apenas quando o lead já estiver pronto para falar de agenda ou quando precisar confirmar disponibilidade real.
+- Antes de criar, editar ou deletar um evento, confirme explicitamente os detalhes finais.
+- Nunca invente horários, disponibilidade, eventos ou confirmações.
+- Se houver conflito, explique com clareza e ofereça alternativas.
+
+## REGRA DE OURO
+A Sofia não conduz pela pressão, conduz pela clareza.
+Ela entende primeiro, organiza a necessidade e só então oferece o agendamento como a saída mais natural da conversa.
+
+Responda sempre em português brasileiro.`;
 async function getSofiaResponse(userId, userMessage, audioContext = null) {
     // ===== A/B TESTING — atribuir variante =====
     const abVariant = abTesting.assignVariant(userId);
@@ -274,20 +478,23 @@ async function getSofiaResponse(userId, userMessage, audioContext = null) {
     // ===== CONTEXTO FRIO — detectar gap > COLD_CONTEXT_HOURS ===== 
     const coldPrompt = await injetarContextoFrio(effectivePrompt, userId);
 
+    let leadData = null;
+    try {
+        leadData = await leadMemory.getOrCreateLead(userId);
+    } catch (error) {
+        console.warn(`⚠️ leadMemory indisponível para ${userId}: ${error.message}`);
+        leadData = null;
+    }
+
     // Inicializa o histórico se não existir
     if (!chatHistories[userId]) {
         console.log(`📝 Iniciando novo histórico para ${userId} [A/B: ${abVariant}]`);
-        chatHistories[userId] = [
-            { role: "system", content: coldPrompt }
-        ];
+        chatHistories[userId] = buildInitialChatHistory(coldPrompt, leadData);
 
         // Bug 2 — Hidratação: restaura histórico do banco após restart no Railway
         try {
-            const leadMem = require('./leadSystem/leadMemory');
-            const leadData = await leadMem.getOrCreateLead(userId);
-            const hist = (leadData.contexto_conversa || []).slice(-10);
+            const hist = (leadData?.contexto_conversa || []).slice(-10);
             if (hist.length > 0) {
-                chatHistories[userId].push(...hist.map(m => ({ role: m.role, content: m.content })));
                 console.log(`💾 Histórico restaurado do banco para ${userId}: ${hist.length} msgs`);
             }
         } catch (e) {
@@ -302,8 +509,12 @@ async function getSofiaResponse(userId, userMessage, audioContext = null) {
     // ===== MEMÓRIA DO CLIENTE (compacta) =====
     const clientMem = clientMemory.getClientMemory(userId);
     const memoryContext = clientMemory.createMemoryContext(userId);
+    const leadConversationHistory = leadData?.contexto_conversa || [];
+    const leadContext = leadData ? buildLeadContext(leadData, leadConversationHistory) : '';
+    const hasExplicitLeadContext = typeof audioContext === 'string'
+        && (audioContext.includes('[CONTEXTO DO LEAD]') || audioContext.includes('## CONTEXTO DO LEAD ATUAL'));
     
-    console.log(`👤 Cliente: ${clientMem.personal.name || 'Desconhecido'}`);
+    console.log(`👤 Cliente: ${clientMem.personal.name || leadData?.nome || 'Desconhecido'}`);
 
     // ===== RAG — Buscar APENAS se a mensagem pede informação =====
     // Mensagens curtas (oi, ok, sim, não) não precisam de RAG
@@ -349,6 +560,10 @@ async function getSofiaResponse(userId, userMessage, audioContext = null) {
 
     // ===== PREPARAR MENSAGEM — Contexto enxuto =====
     const contextParts = [];
+
+    if (leadContext && !hasExplicitLeadContext) {
+        contextParts.push(leadContext);
+    }
     
     // Memória: apenas se tem info útil (não envia bloco vazio)
     if (memoryContext && memoryContext.trim().length > 20) {
@@ -486,7 +701,7 @@ async function getSofiaResponse(userId, userMessage, audioContext = null) {
                 throw new Error('Resposta final inválida');
             }
 
-            sofiaMessage = finalResponse.choices[0].message.content;
+            sofiaMessage = enforceSingleQuestion(finalResponse.choices[0].message.content);
             
             // Adicionar ao histórico
             chatHistories[userId].push({
@@ -496,7 +711,7 @@ async function getSofiaResponse(userId, userMessage, audioContext = null) {
 
         } else {
             // Resposta normal sem function calls
-            sofiaMessage = choice.message.content;
+            sofiaMessage = enforceSingleQuestion(choice.message.content);
             chatHistories[userId].push({ role: "assistant", content: sofiaMessage });
         }
 
@@ -593,4 +808,12 @@ setInterval(() => {
     }
 }, 30 * 60 * 1000);
 
-module.exports = { getSofiaResponse, analyzeCustomerIntent, shouldEscalateToHuman };
+module.exports = {
+    getSofiaResponse,
+    analyzeCustomerIntent,
+    shouldEscalateToHuman,
+    detectConversationPhase,
+    buildLeadContext,
+    buildInitialChatHistory,
+    systemPrompt,
+};

@@ -10,6 +10,7 @@ const {
 } = require('./scheduling-system');
 
 const clientMemory = require('../clientMemory');
+const agendamentoRobusto = require('../leadSystem/agendamentoRobusto');
 
 function hasAiFallbackAvailable() {
   try {
@@ -26,6 +27,27 @@ class SchedulingAgent {
       console.log(`📅 [SchedulingAgent] Processando: ${intention.type}`);
       console.log(`   Cliente: ${lead.nome} (${phone})`);
       console.log(`   Mensagem: "${userMessage}"`);
+
+      const robustResult = await agendamentoRobusto.handleSchedulingMessage(phone, lead.nome, lead, userMessage, intention.type);
+      if (robustResult?.handled) {
+        console.log('📅 [SchedulingAgent] Fluxo robusto:', {
+          success: robustResult.success,
+          type: intention.type,
+          uuid: robustResult.uuid || null,
+          availableSlots: robustResult.availableSlots?.length || 0,
+        });
+
+        this.logSchedulingEvent(phone, lead.nome, intention.type, {
+          success: robustResult.success,
+          schedulingData: {
+            uuid: robustResult.uuid || null,
+            dataAgendamento: robustResult.dataAgendamento || null,
+          },
+          availableSlots: robustResult.availableSlots || [],
+        });
+
+        return robustResult.message;
+      }
 
       const result = await SchedulingManager.processScheduling(phone, lead.nome, userMessage);
 

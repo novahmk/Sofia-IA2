@@ -25,38 +25,9 @@ const agentAdministrative = require('./agentAdministrative');
 const agentScheduling = require('./agentScheduling');
 const selfImprovement = require('../improvement/selfImprovement');
 const eventBus = require('../eventBus');
-
-// Mesma lógica de progressão de funil do commercialFlow (mantém compatibilidade)
-function detectFunnelProgression(lead, userMessage) {
-  const msg = userMessage.toLowerCase();
-  let newStage = lead.etapa_funil;
-
-  if (lead.etapa_funil === 'novo') {
-    if (
-      msg.includes('interesse') ||
-      msg.includes('quero') ||
-      msg.includes('gostaria') ||
-      msg.includes('preciso')
-    ) {
-      newStage = 'qualificado';
-    }
-  } else if (lead.etapa_funil === 'qualificado') {
-    if (
-      msg.includes('agendar') ||
-      msg.includes('marcar') ||
-      msg.includes('horário') ||
-      msg.includes('quando')
-    ) {
-      newStage = 'proposta';
-    }
-  } else if (lead.etapa_funil === 'proposta') {
-    if (msg.includes('confirmo') || msg.includes('aceito') || msg.includes('fechar')) {
-      newStage = 'negociacao';
-    }
-  }
-
-  return newStage;
-}
+const { processarQualificacao } = require('../leadSystem/qualificacaoCapilar');
+const followUpManager = require('../leadSystem/followUpManager');
+const scoringEngine = require('../leadSystem/leadScoringEngine');
 
 class SupervisorAgent {
   /**
@@ -76,12 +47,17 @@ class SupervisorAgent {
       ...(await leadMemory.getOrCreateLead(phone, name)),
       ...runtimeContext,
     };
+    const followUpReason = await followUpManager.registrarInteracao(phone, userMessage, lead);
 
-    // 2. Detecta progressão de funil
-    const newStage = detectFunnelProgression(lead, userMessage);
-    if (newStage !== lead.etapa_funil) {
-      await leadMemory.updateLead(phone, { etapa_funil: newStage });
-      lead.etapa_funil = newStage;
+    // 2. Processa qualificação capilar progressiva (substitui regex)
+    const qualificationHistory = [
+      ...(lead.contexto_conversa || []),
+      { role: 'user', content: userMessage, timestamp: new Date().toISOString() },
+    ];
+    const qualificationResult = await processarQualificacao(lead, userMessage, qualificationHistory);
+    if (qualificationResult.status === 'ok') {
+      lead.etapa_funil = qualificationResult.etapaFunil;
+      lead.qualificacao = qualificationResult.qualificacao;
     }
 
     // 3. Análise de intenção (síncrona, sem custo de API)
@@ -116,14 +92,24 @@ class SupervisorAgent {
     }
 
     // 5. Atualiza lead
-    await leadMemory.updateLead(phone, { etapa_funil: lead.etapa_funil });
+    await leadMemory.updateLead(phone, {
+      etapa_funil: lead.etapa_funil,
+      qualificacao: lead.qualificacao,
+    });
 
-    // 6. Agenda follow-up automático no sistema novo
-    if (lead.etapa_funil === 'novo' && (lead.follow_up_count || 0) === 0) {
-      await leadDB.atualizarLead(phone, {
-        follow_up_count: 0,
-        follow_up_proximo: new Date(Date.now() + 2 * 86_400_000).toISOString(),
-      });
+    setImmediate(() => {
+      scoringEngine.calcularScore(phone)
+        .then((scoreInfo) => {
+          if (scoreInfo) {
+            console.log(`[scoring] ${phone}: score=${scoreInfo.score}, temp=${scoreInfo.temperatura}`);
+          }
+        })
+        .catch((err) => console.error('[scoring] Erro:', err.message));
+    });
+
+    // 6. Reinicia a sequência correta a partir da última interação do lead
+    if (!followUpReason && ['novo', 'em_qualificacao'].includes(lead.etapa_funil)) {
+      await followUpManager.iniciarSequencia(phone, 'sem_resposta');
     }
 
     const latency = Date.now() - start;

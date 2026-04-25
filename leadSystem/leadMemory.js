@@ -36,9 +36,18 @@ class LeadMemory {
 
     const structuredUpdates = {};
     const structuredFields = [
+      'etapa_funil',
       'status',
       'intencao',
       'score',
+      'lead_score',
+      'temperatura',
+      'nivel_qualificacao',
+      'motivo_recusa',
+      'segmento_remarketing',
+      'tentativas_remarketing',
+      'convertido_via_remarketing',
+      'data_conversao',
       'procedimento_interesse',
       'resumo_conversa',
       'agendado_em',
@@ -76,7 +85,18 @@ class LeadMemory {
       lead.contexto_conversa.shift();
     }
 
-    await this.updateLead(phone, { contexto_conversa: lead.contexto_conversa });
+    const updates = {
+      contexto_conversa: lead.contexto_conversa,
+      ultimo_mensagem: message.substring(0, 500),
+    };
+
+    if (isUser) {
+      updates.total_mensagens_usuario = (lead.total_mensagens_usuario || 0) + 1;
+    } else {
+      updates.total_mensagens_assistente = (lead.total_mensagens_assistente || 0) + 1;
+    }
+
+    await this.updateLead(phone, updates);
   }
 
   async clearAllConversationHistory() {

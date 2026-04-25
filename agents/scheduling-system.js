@@ -6,11 +6,12 @@ const leadMemory = require('../leadSystem/leadMemory');
 const clientMemory = require('../clientMemory');
 const messageQueue = require('../messageQueue');
 const cron = require('node-cron');
+const { formatDateOnlyInTimeZone, getConfiguredTimeZone } = require('../utils/timezone');
 
 let schedulingOpenAIClient = null;
 
 const BUSINESS_CONFIG = {
-  timezone: 'America/Sao_Paulo',
+  timezone: getConfiguredTimeZone(),
   openTime: '08:00',
   closeTime: '18:00',
   slotDuration: 60,
@@ -66,6 +67,7 @@ Pode me responder algo como: *amanhã*, *quinta-feira* ou *próxima semana*.`,
   confirmSchedule: (name, dateTime) => {
     const date = new Date(dateTime);
     const formatted = date.toLocaleString('pt-BR', {
+      timeZone: BUSINESS_CONFIG.timezone,
       weekday: 'long',
       year: 'numeric',
       month: 'long',
@@ -80,6 +82,7 @@ Pode me responder algo como: *amanhã*, *quinta-feira* ou *próxima semana*.`,
   reminder: (name, dateTime) => {
     const date = new Date(dateTime);
     const formatted = date.toLocaleString('pt-BR', {
+      timeZone: BUSINESS_CONFIG.timezone,
       weekday: 'long',
       hour: '2-digit',
       minute: '2-digit',
@@ -99,6 +102,7 @@ Pode me responder algo como: *amanhã*, *quinta-feira* ou *próxima semana*.`,
   needConfirmation: (name, dateTime) => {
     const date = new Date(dateTime);
     const formatted = date.toLocaleString('pt-BR', {
+      timeZone: BUSINESS_CONFIG.timezone,
       weekday: 'long',
       day: '2-digit',
       month: 'long',
@@ -453,7 +457,7 @@ class SchedulingIntentionAnalyzer {
           if (delta <= 0) delta += 7;
           date.setDate(date.getDate() + delta);
         }
-        suggestedDate = date.toISOString().split('T')[0];
+        suggestedDate = formatDateOnlyInTimeZone(date, BUSINESS_CONFIG.timezone);
         break;
       }
     }
@@ -483,6 +487,7 @@ class BusinessHoursManager {
 
   static formatSlot(date) {
     return date.toLocaleString('pt-BR', {
+      timeZone: BUSINESS_CONFIG.timezone,
       weekday: 'short',
       day: '2-digit',
       month: 'short',
@@ -697,7 +702,12 @@ class NaturalSlotParser {
   static clarify(slots) {
     const options = slots.slice(0, 3).map((slot) => {
       const date = new Date(slot.start);
-      return `*${date.toLocaleString('pt-BR', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}*`;
+      return `*${date.toLocaleString('pt-BR', {
+        timeZone: BUSINESS_CONFIG.timezone,
+        weekday: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      })}*`;
     }).join(' ou ');
 
     return `Desculpe, não entendi bem qual horário você preferiu 😅\n\nPode me dizer: ${options}?`;
@@ -812,7 +822,7 @@ class SchedulingManagerClass {
           let matches = true;
 
           if (extraction.suggestedDate) {
-            matches = matches && slotDate.toISOString().split('T')[0] === extraction.suggestedDate;
+            matches = matches && formatDateOnlyInTimeZone(slotDate, BUSINESS_CONFIG.timezone) === extraction.suggestedDate;
           }
 
           if (extraction.suggestedTime) {
@@ -868,7 +878,7 @@ class SchedulingManagerClass {
       const slotDate = new Date(slot.start);
       let matches = true;
       if (extraction.suggestedDate) {
-        matches = matches && slotDate.toISOString().split('T')[0] === extraction.suggestedDate;
+        matches = matches && formatDateOnlyInTimeZone(slotDate, BUSINESS_CONFIG.timezone) === extraction.suggestedDate;
       }
       if (extraction.suggestedTime) {
         const [hour, minute] = extraction.suggestedTime.split(':').map(Number);
@@ -1153,7 +1163,7 @@ class SchedulingReminders {
       const allClients = clientMemory.listAllClients();
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
-      const tomorrowDate = tomorrow.toISOString().split('T')[0];
+      const tomorrowDate = formatDateOnlyInTimeZone(tomorrow, BUSINESS_CONFIG.timezone);
 
       for (const client of allClients) {
         const memory = clientMemory.getClientMemory(client.phone);

@@ -8,6 +8,84 @@
 
 const db = require('./database');
 
+function getDefaultQualificacao() {
+  return {
+    interesse_principal: null,
+    tempo_problema: null,
+    tratamento_anterior: null,
+    descricao_tratamento: null,
+    urgencia: null,
+    decide_sozinho: null,
+    abertura_investimento: null,
+    objecao_atual: null,
+    sentimento: null,
+    pronto_para_agendamento: false,
+    nivel_qualificacao: 'novo',
+    sinais_extraidos_em: null,
+  };
+}
+
+function mapNivelQualificacaoToEtapa(nivel) {
+  switch (nivel) {
+    case 'hot':
+      return 'hot';
+    case 'qualificado':
+      return 'qualificado';
+    case 'em_qualificacao':
+      return 'em_qualificacao';
+    default:
+      return 'novo';
+  }
+}
+
+function normalizeQualificacaoCapilar(sinais = {}, nivel = 'novo', previous = {}) {
+  const merged = {
+    ...getDefaultQualificacao(),
+    ...(previous || {}),
+  };
+
+  if (sinais.interesse_principal && sinais.interesse_principal !== 'nao_identificado') {
+    merged.interesse_principal = sinais.interesse_principal;
+  }
+
+  if (sinais.tempo_problema && sinais.tempo_problema !== 'nao_informado') {
+    merged.tempo_problema = sinais.tempo_problema;
+  }
+
+  if (typeof sinais.tratamento_anterior === 'boolean') {
+    merged.tratamento_anterior = sinais.tratamento_anterior;
+  }
+
+  if (sinais.urgencia && sinais.urgencia !== 'nao_identificada') {
+    merged.urgencia = sinais.urgencia;
+  }
+
+  if (typeof sinais.decide_sozinho === 'boolean') {
+    merged.decide_sozinho = sinais.decide_sozinho;
+  }
+
+  if (sinais.abertura_investimento && sinais.abertura_investimento !== 'nao_informado') {
+    merged.abertura_investimento = sinais.abertura_investimento;
+  }
+
+  if (sinais.objecao_detectada && sinais.objecao_detectada !== 'nao_identificada') {
+    merged.objecao_atual = sinais.objecao_detectada;
+  }
+
+  if (sinais.sentimento) {
+    merged.sentimento = sinais.sentimento;
+  }
+
+  if (typeof sinais.pronto_para_agendamento === 'boolean') {
+    merged.pronto_para_agendamento = sinais.pronto_para_agendamento;
+  }
+
+  merged.nivel_qualificacao = nivel || previous?.nivel_qualificacao || 'novo';
+  merged.sinais_extraidos_em = new Date().toISOString();
+
+  return merged;
+}
+
 /**
  * Busca ou cria um lead na tabela `leads`.
  * Retorna o objeto JSONB (`data`) mergeado com as colunas nativas.
@@ -69,13 +147,49 @@ async function buscarOuCriarLead(telefone) {
       score: 0,
       procedimento_interesse: null,
       resumo_conversa: null,
+      qualificacao: getDefaultQualificacao(),
       follow_up_count: 0,
       follow_up_proximo: null,
       redirecionado_comercial: false,
     };
   } catch (e) {
     console.warn(`⚠️ [leadDB] buscarOuCriarLead: ${e.message}`);
-    return { telefone, status: 'novo', score: 0, follow_up_count: 0, redirecionado_comercial: false };
+
+    const cachedLead = db.get('leads', telefone);
+    if (cachedLead) {
+      return {
+        ...cachedLead,
+        telefone,
+        status: cachedLead.status || 'novo',
+        intencao: cachedLead.intencao || null,
+        score: cachedLead.score ?? 0,
+        procedimento_interesse: cachedLead.procedimento_interesse || null,
+        resumo_conversa: cachedLead.resumo_conversa || null,
+        qualificacao: cachedLead.qualificacao || getDefaultQualificacao(),
+        follow_up_count: cachedLead.follow_up_count ?? 0,
+        follow_up_proximo: cachedLead.follow_up_proximo || null,
+        redirecionado_comercial: cachedLead.redirecionado_comercial ?? false,
+      };
+    }
+
+    const localLead = {
+      telefone,
+      nome: null,
+      status: 'novo',
+      intencao: null,
+      score: 0,
+      procedimento_interesse: null,
+      resumo_conversa: null,
+      qualificacao: getDefaultQualificacao(),
+      follow_up_count: 0,
+      follow_up_proximo: null,
+      redirecionado_comercial: false,
+    };
+    db.set('leads', telefone, localLead);
+
+    return {
+      ...localLead,
+    };
   }
 }
 
@@ -84,7 +198,10 @@ async function buscarOuCriarLead(telefone) {
  * @param {string} telefone
  * @param {object} campos — qualquer subset de: status, intencao, score,
  *   procedimento_interesse, resumo_conversa, agendado_em, follow_up_count,
- *   follow_up_proximo, redirecionado_comercial, nome
+ *   follow_up_proximo, redirecionado_comercial, nome, etapa_funil,
+ *   lead_score, temperatura, nivel_qualificacao, motivo_recusa,
+ *   segmento_remarketing, tentativas_remarketing, convertido_via_remarketing,
+ *   data_conversao
  */
 async function atualizarLead(telefone, campos) {
   if (!campos || Object.keys(campos).length === 0) return;
@@ -94,9 +211,18 @@ async function atualizarLead(telefone, campos) {
   let i = 1;
 
   const map = {
+    etapa_funil: 'etapa_funil',
     status: 'status',
     intencao: 'intencao',
     score: 'score',
+    lead_score: 'lead_score',
+    temperatura: 'temperatura',
+    nivel_qualificacao: 'nivel_qualificacao',
+    motivo_recusa: 'motivo_recusa',
+    segmento_remarketing: 'segmento_remarketing',
+    tentativas_remarketing: 'tentativas_remarketing',
+    convertido_via_remarketing: 'convertido_via_remarketing',
+    data_conversao: 'data_conversao',
     procedimento_interesse: 'procedimento_interesse',
     resumo_conversa: 'resumo_conversa',
     agendado_em: 'agendado_em',
@@ -250,6 +376,51 @@ async function marcarRedirecionadoComercial(telefone) {
   }
 }
 
+async function atualizarQualificacaoCapilar(telefone, sinais, nivel) {
+  const leadAtual = await buscarOuCriarLead(telefone);
+  const qualificacao = normalizeQualificacaoCapilar(sinais, nivel, leadAtual.qualificacao);
+  const etapaFunil = mapNivelQualificacaoToEtapa(qualificacao.nivel_qualificacao);
+
+  const payload = {
+    qualificacao,
+    etapa_funil: etapaFunil,
+  };
+
+  if (qualificacao.interesse_principal) {
+    payload.interesse_principal = qualificacao.interesse_principal;
+  }
+
+  if (qualificacao.tempo_problema) {
+    payload.tempo_problema = qualificacao.tempo_problema;
+  }
+
+  if (typeof qualificacao.tratamento_anterior === 'boolean') {
+    payload.tratamento_anterior = qualificacao.tratamento_anterior;
+  }
+
+  if (qualificacao.descricao_tratamento) {
+    payload.descricao_tratamento_anterior = qualificacao.descricao_tratamento;
+  }
+
+  if (qualificacao.urgencia) {
+    payload.urgencia_percebida = qualificacao.urgencia;
+  }
+
+  try {
+    await db.query(
+      `UPDATE leads
+          SET data = COALESCE(data, '{}'::jsonb) || $1::jsonb,
+              ultimo_contato = NOW()
+        WHERE lead_id = $2`,
+      [JSON.stringify(payload), telefone]
+    );
+  } catch (e) {
+    console.warn(`⚠️ [leadDB] atualizarQualificacaoCapilar: ${e.message}`);
+  }
+
+  return { qualificacao, etapaFunil };
+}
+
 module.exports = {
   buscarOuCriarLead,
   atualizarLead,
@@ -260,4 +431,5 @@ module.exports = {
   getAgendamentosParaExecutar,
   marcarRetornoExecutado,
   marcarRedirecionadoComercial,
+  atualizarQualificacaoCapilar,
 };

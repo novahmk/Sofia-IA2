@@ -52,6 +52,8 @@ const { getSofiaResponse } = require('./ai');
 const { transcribeAudioFromUrl, detectMediaTypeFromMime, createAudioContext } = require('./audioProcessor');
 const conversationManager = require('./core/conversationManager');
 const knowledgeBase = require('./knowledgeBase');
+const followUpManager = require('./leadSystem/followUpManager');
+const remarketingSystem = require('./leadSystem/remarketingSystem');
 const swop = require('./swop');
 const selfHealing = require('./utils/selfHealing');
 const inputSanitizer = require('./utils/inputSanitizer');
@@ -345,6 +347,9 @@ async function processIncomingMessage(webhookData) {
             // ===== REGISTROS PRÉ-IA =====
             auditLogger.msgReceived(userPhone, userText, mediaType);
             const currentIntent = intentFlow.recordIntent(userPhone, userText);
+            await remarketingSystem.registrarResposta(userPhone).catch(err => {
+                console.warn('⚠️ Remarketing registrarResposta:', err.message);
+            });
 
             // Envia o texto (com contexto de áudio se aplicável) para a IA
             const responseStartTime = Date.now();
@@ -1097,6 +1102,12 @@ async function start() {
         wsManager.init(server);
         console.log(`\n🚀 Sofia IA rodando na porta ${WEBHOOK_PORT}`);
         auditLogger.startup();
+        followUpManager.iniciarLoop().catch(err => {
+            console.warn('⚠️ FollowUpManager:', err.message);
+        });
+        remarketingSystem.iniciarLoop().catch(err => {
+            console.warn('⚠️ RemarketingSystem:', err.message);
+        });
     });
 
     // Inicializar coisas pesadas DEPOIS, em background

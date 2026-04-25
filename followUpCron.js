@@ -16,12 +16,23 @@ const cron = require('node-cron');
 const { OpenAI } = require('openai');
 const leadDB = require('./leadDB');
 const { salvarMensagem } = require('./conversationDB');
+const { getConfiguredTimeZone } = require('./utils/timezone');
+
+const APP_TIMEZONE = getConfiguredTimeZone();
 
 // Funções de envio são injetadas pelo index.js para evitar dependência circular
 let _enviarMensagem = null;
+let _initOptions = {
+  enableLeadFollowUp: true,
+  enableScheduledReturns: true,
+};
 
-function init(enviarMensagemFn) {
+function init(enviarMensagemFn, options = {}) {
   _enviarMensagem = enviarMensagemFn;
+  _initOptions = {
+    ..._initOptions,
+    ...options,
+  };
   _iniciarCrons();
   console.log('⏰ [followUpCron] Crons iniciados');
 }
@@ -52,7 +63,7 @@ const SEQUENCIA_FOLLOWUP = [
 
 function dentroDoHorarioComercial() {
   const horaBrasil = new Intl.DateTimeFormat('pt-BR', {
-    timeZone: 'America/Sao_Paulo',
+    timeZone: APP_TIMEZONE,
     hour: 'numeric',
     hour12: false,
   }).format(new Date());
@@ -175,42 +186,46 @@ Escreva uma mensagem amigável e natural para retomar o contato. Máximo 2 frase
 
 function _iniciarCrons() {
   // Cron 1: follow-ups a cada hora em dias úteis + sábado, 9h-18h
-  cron.schedule('0 9-18 * * 1-6', async () => {
-    if (!dentroDoHorarioComercial()) return;
-    if (!_enviarMensagem) return;
+  if (_initOptions.enableLeadFollowUp) {
+    cron.schedule('0 9-18 * * 1-6', async () => {
+      if (!dentroDoHorarioComercial()) return;
+      if (!_enviarMensagem) return;
 
-    console.log('[followUpCron] Verificando leads para follow-up...');
-    try {
-      const leads = await leadDB.getLeadsParaFollowUp();
-      console.log(`[followUpCron] ${leads.length} lead(s) para follow-up`);
-      for (const lead of leads) {
-        await processarFollowUp(lead).catch(e =>
-          console.warn(`⚠️ [followUpCron] Erro no lead ${lead.telefone}: ${e.message}`)
-        );
+      console.log('[followUpCron] Verificando leads para follow-up...');
+      try {
+        const leads = await leadDB.getLeadsParaFollowUp();
+        console.log(`[followUpCron] ${leads.length} lead(s) para follow-up`);
+        for (const lead of leads) {
+          await processarFollowUp(lead).catch(e =>
+            console.warn(`⚠️ [followUpCron] Erro no lead ${lead.telefone}: ${e.message}`)
+          );
+        }
+      } catch (e) {
+        console.warn(`⚠️ [followUpCron] Erro geral: ${e.message}`);
       }
-    } catch (e) {
-      console.warn(`⚠️ [followUpCron] Erro geral: ${e.message}`);
-    }
-  });
+    }, { timezone: APP_TIMEZONE });
+  }
 
   // Cron 2: retornos agendados a cada 15 minutos
-  cron.schedule('*/15 * * * *', async () => {
-    if (!dentroDoHorarioComercial()) return;
-    if (!_enviarMensagem) return;
+  if (_initOptions.enableScheduledReturns) {
+    cron.schedule('*/15 * * * *', async () => {
+      if (!dentroDoHorarioComercial()) return;
+      if (!_enviarMensagem) return;
 
-    try {
-      const agendamentos = await leadDB.getAgendamentosParaExecutar();
-      for (const ag of agendamentos) {
-        const mensagem = await gerarMensagemRetorno(ag);
-        await _enviarMensagem(ag.telefone, mensagem);
-        await salvarMensagem(ag.telefone, 'assistant', mensagem, 'text');
-        await leadDB.marcarRetornoExecutado(ag.id);
-        console.log(`📞 [followUpCron] Retorno executado para ${ag.telefone}`);
+      try {
+        const agendamentos = await leadDB.getAgendamentosParaExecutar();
+        for (const ag of agendamentos) {
+          const mensagem = await gerarMensagemRetorno(ag);
+          await _enviarMensagem(ag.telefone, mensagem);
+          await salvarMensagem(ag.telefone, 'assistant', mensagem, 'text');
+          await leadDB.marcarRetornoExecutado(ag.id);
+          console.log(`📞 [followUpCron] Retorno executado para ${ag.telefone}`);
+        }
+      } catch (e) {
+        console.warn(`⚠️ [followUpCron] Erro no cron de retornos: ${e.message}`);
       }
-    } catch (e) {
-      console.warn(`⚠️ [followUpCron] Erro no cron de retornos: ${e.message}`);
-    }
-  });
+    }, { timezone: APP_TIMEZONE });
+  }
 }
 
 module.exports = { init, redirecionarParaComercial };

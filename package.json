@@ -6,8 +6,10 @@
   "scripts": {
     "start": "node whatsappExpressWebhook.js",
     "start:webhook": "node whatsappExpressWebhook.js",
+    "migrate": "node migrations/run.js",
     "purge:history": "node scripts/purgeConversationHistory.js",
-    "test:calendar-smoke": "node scripts/validateCalendar.js"
+    "test:calendar-smoke": "node scripts/validateCalendar.js",
+    "test:final-smoke": "node scripts/validateFinalImplementation.js"
   },
   "engines": {
     "node": ">=18.0.0"

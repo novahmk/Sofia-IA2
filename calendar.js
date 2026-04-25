@@ -3,9 +3,14 @@ require('dotenv').config();
 const fs = require('fs').promises;
 const path = require('path');
 const { google } = require('googleapis');
+const {
+  buildIsoFromDateAndTime,
+  formatDateOnlyInTimeZone,
+  getConfiguredTimeZone,
+} = require('./utils/timezone');
 
 const CALENDAR_SCOPE = ['https://www.googleapis.com/auth/calendar'];
-const DEFAULT_TIMEZONE = process.env.TIMEZONE || 'America/Sao_Paulo';
+const DEFAULT_TIMEZONE = getConfiguredTimeZone();
 const DEFAULT_DURATION_MINUTES = 60;
 const DEFAULT_FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 const DEFAULT_BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8080';
@@ -43,11 +48,11 @@ function normalizeTime(timeInput) {
   }
 
   const [, hour, minute, second] = match;
-  return `${hour.padStart(2, '0')}:${minute}:${second || '00'}-03:00`;
+  return `${hour.padStart(2, '0')}:${minute}:${second || '00'}`;
 }
 
-function buildDateTime(dateInput, timeInput) {
-  return new Date(`${normalizeDate(dateInput)}T${normalizeTime(timeInput)}`).toISOString();
+function buildDateTime(dateInput, timeInput, timeZone = DEFAULT_TIMEZONE) {
+  return buildIsoFromDateAndTime(normalizeDate(dateInput), normalizeTime(timeInput), timeZone);
 }
 
 function addMinutes(dateTimeIso, minutes) {
@@ -65,6 +70,16 @@ function formatEvent(event) {
     end: event.end?.dateTime || event.end?.date || null,
     status: event.status || 'confirmed',
     link: event.htmlLink || null,
+  };
+}
+
+function normalizeSlotSearchOptions(options = {}, defaultDurationMinutes = DEFAULT_DURATION_MINUTES) {
+  return {
+    count: Math.max(1, Number(options.count || 3)),
+    minHoursFromNow: Math.max(0, Number(options.minHoursFromNow || 0)),
+    daysAhead: Math.max(1, Number(options.daysAhead || 15)),
+    slotDuration: Math.max(15, Number(options.slotDuration || defaultDurationMinutes)),
+    excludeDays: Array.isArray(options.excludeDays) ? options.excludeDays : [0, 6],
   };
 }
 
@@ -295,12 +310,12 @@ class CalendarManager {
   async listEvents(startDate, endDate) {
     try {
       const calendar = await this.getCalendarClient();
-      const timeMin = `${normalizeDate(startDate)}T00:00:00-03:00`;
-      const timeMax = `${normalizeDate(endDate)}T23:59:59-03:00`;
+      const timeMin = buildDateTime(startDate, '00:00:00', this.timezone);
+      const timeMax = buildDateTime(endDate, '23:59:59', this.timezone);
       const response = await calendar.events.list({
         calendarId: this.getCalendarId(),
-        timeMin: new Date(timeMin).toISOString(),
-        timeMax: new Date(timeMax).toISOString(),
+        timeMin,
+        timeMax,
         singleEvents: true,
         orderBy: 'startTime',
       });
@@ -321,9 +336,9 @@ class CalendarManager {
   async checkAvailability(date, time, durationMinutes = this.defaultDurationMinutes, endTime = null) {
     try {
       const calendar = await this.getCalendarClient();
-      const startDateTime = buildDateTime(date, time);
+      const startDateTime = buildDateTime(date, time, this.timezone);
       const endDateTime = endTime
-        ? buildDateTime(date, endTime)
+        ? buildDateTime(date, endTime, this.timezone)
         : addMinutes(startDateTime, durationMinutes);
 
       const response = await calendar.events.list({
@@ -366,7 +381,51 @@ class CalendarManager {
     }
   }
 
-  async getAvailableSlots(date, slotDuration = this.defaultDurationMinutes) {
+  async getAvailableSlots(dateOrOptions, slotDuration = this.defaultDurationMinutes) {
+    if (dateOrOptions && typeof dateOrOptions === 'object' && !Array.isArray(dateOrOptions)) {
+      return this.getAvailableSlotsByCriteria(dateOrOptions);
+    }
+
+    return this.getAvailableSlotsForDate(dateOrOptions, slotDuration);
+  }
+
+  async getAvailableSlotsByCriteria(options = {}) {
+    try {
+      const searchOptions = normalizeSlotSearchOptions(options, this.defaultDurationMinutes);
+      const earliestAllowedTime = Date.now() + searchOptions.minHoursFromNow * 60 * 60 * 1000;
+      const collected = [];
+      const cursor = new Date();
+
+      for (let offset = 0; offset < searchOptions.daysAhead && collected.length < searchOptions.count; offset += 1) {
+        const currentDate = new Date(cursor);
+        currentDate.setDate(cursor.getDate() + offset);
+
+        if (searchOptions.excludeDays.includes(currentDate.getDay())) {
+          continue;
+        }
+
+        const normalizedDate = formatDateOnlyInTimeZone(currentDate, this.timezone);
+        const dailySlots = await this.getAvailableSlotsForDate(normalizedDate, searchOptions.slotDuration);
+        for (const slot of dailySlots) {
+          if (new Date(slot.start).getTime() < earliestAllowedTime) {
+            continue;
+          }
+
+          collected.push(slot);
+          if (collected.length >= searchOptions.count) {
+            break;
+          }
+        }
+      }
+
+      return collected.slice(0, searchOptions.count);
+    } catch (error) {
+      console.error('❌ Erro ao buscar slots por critério:', error.message);
+      return [];
+    }
+  }
+
+  async getAvailableSlotsForDate(date, slotDuration = this.defaultDurationMinutes) {
     try {
       const normalizedDate = normalizeDate(date);
       const eventsResult = await this.listEvents(normalizedDate, normalizedDate);
@@ -375,8 +434,8 @@ class CalendarManager {
       }
 
       const slots = [];
-      let currentTime = new Date(buildDateTime(normalizedDate, '08:00'));
-      const endDay = new Date(buildDateTime(normalizedDate, '18:00'));
+      let currentTime = new Date(buildDateTime(normalizedDate, '08:00', this.timezone));
+      const endDay = new Date(buildDateTime(normalizedDate, '18:00', this.timezone));
       const events = eventsResult.events || [];
 
       while (currentTime < endDay) {
@@ -408,9 +467,9 @@ class CalendarManager {
   async createEvent({ title, description = '', date, time, durationMinutes = this.defaultDurationMinutes, endTime = null, attendees = [] }) {
     try {
       const calendar = await this.getCalendarClient();
-      const startDateTime = buildDateTime(date, time);
+      const startDateTime = buildDateTime(date, time, this.timezone);
       const endDateTime = endTime
-        ? buildDateTime(date, endTime)
+        ? buildDateTime(date, endTime, this.timezone)
         : addMinutes(startDateTime, durationMinutes);
 
       const response = await calendar.events.insert({
@@ -494,9 +553,9 @@ class CalendarManager {
         : this.defaultDurationMinutes;
       const nextDate = date || currentStart?.slice(0, 10);
       const nextTime = time || currentStart?.slice(11, 16);
-      const nextStart = nextDate && nextTime ? buildDateTime(nextDate, nextTime) : currentStart;
+      const nextStart = nextDate && nextTime ? buildDateTime(nextDate, nextTime, this.timezone) : currentStart;
       const nextEnd = endTime
-        ? buildDateTime(nextDate || currentStart?.slice(0, 10), endTime)
+        ? buildDateTime(nextDate || currentStart?.slice(0, 10), endTime, this.timezone)
         : nextStart
           ? addMinutes(nextStart, durationMinutes || currentDurationMinutes)
           : currentEnd;

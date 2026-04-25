@@ -1,5 +1,11 @@
 # Sofia-IA2
 
+Repositorio GitHub: [novahmk/Sofia-IA2](https://github.com/novahmk/Sofia-IA2)
+Baixar codigo em ZIP: [Download do projeto](https://github.com/novahmk/Sofia-IA2/archive/refs/heads/main.zip)
+
+Descritivo funcional da assistente: [DESCRITIVO_SOFIA_IA.md](DESCRITIVO_SOFIA_IA.md)
+Versao comercial e institucional: [APRESENTACAO_COMERCIAL_SOFIA_IA.md](APRESENTACAO_COMERCIAL_SOFIA_IA.md)
+
 ## Produção Railway
 
 Para rodar no Railway, o servidor principal agora usa `whatsappExpressWebhook.js`.

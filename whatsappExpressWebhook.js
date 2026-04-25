@@ -52,6 +52,7 @@ const { carregarHistorico, getHorasDeContextoFrio } = require('./conversationDB'
 const leadDB = require('./leadDB');
 const { chamarIA } = require('./sdrAI');
 const calendarService = require('./calendar');
+const remarketingSystem = require('./leadSystem/remarketingSystem');
 const db = require('./database');
 
 try {
@@ -631,6 +632,10 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
     selfImprovement.feedNextMessage(from, textoLimpo);
     eventBus.publish('message_received', { phone: from, nome: pushName, message: textoLimpo.substring(0, 80) });
 
+    await remarketingSystem.registrarResposta(from, pushName).catch((error) => {
+      console.warn(`⚠️ [${reqId}] remarketingSystem.registrarResposta falhou: ${error.message}`);
+    });
+
     const startAI = Date.now();
     const result = await messageQueue.enqueue(from, async () => {
       await db.ready.catch(() => {});
@@ -709,6 +714,25 @@ app.post('/webhook', webhookRateLimiter, async (req, res) => {
       }
 
       const resposta = sdrResult.texto;
+      const capturedLeadData = {};
+      const rawCapturedData = sdrResult.captured_data || {};
+      const hasMeaningfulCapture = Boolean(
+        rawCapturedData.interesse_principal
+        || rawCapturedData.tempo_problema
+        || typeof rawCapturedData.tratamento_anterior === 'boolean'
+        || rawCapturedData.descricao_tratamento_anterior
+        || rawCapturedData.sintoma_adicional
+      );
+
+      if (hasMeaningfulCapture) {
+        for (const [key, value] of Object.entries(rawCapturedData)) {
+          if (value !== undefined && value !== null && value !== '') {
+            capturedLeadData[key] = value;
+          }
+        }
+
+        await leadMemory.updateLead(from, capturedLeadData).catch(() => {});
+      }
 
       // Atualizar campos estruturados do lead
       await leadDB.atualizarLead(from, {
@@ -806,12 +830,32 @@ if (knowledgeBase && typeof knowledgeBase.initialize === 'function') {
 
 // ── Follow-up Cron (5s após o servidor subir) ──
 setTimeout(() => {
-  console.log('⏰ Cron legado de follow-up desativado; usando apenas followUpCron.');
+  console.log('⏰ Inicializando follow-up inteligente, remarketing e mantendo apenas o cron de retornos agendados.');
 
-  // Novo cron SDR (node-cron) com follow-up estruturado + retornos agendados
+  try {
+    const followUpManager = require('./leadSystem/followUpManager');
+    followUpManager.iniciarLoop().catch((error) => {
+      console.warn('⚠️ followUpManager não disponível:', error.message);
+    });
+  } catch (e) {
+    console.warn('⚠️ followUpManager não disponível:', e.message);
+  }
+
+  try {
+    remarketingSystem.iniciarLoop().catch((error) => {
+      console.warn('⚠️ remarketingSystem não disponível:', error.message);
+    });
+  } catch (e) {
+    console.warn('⚠️ remarketingSystem não disponível:', e.message);
+  }
+
+  // Mantém apenas os retornos agendados do cron SDR legado.
   try {
     const followUpCron = require('./followUpCron');
-    followUpCron.init(enviarMensagem);
+    followUpCron.init(enviarMensagem, {
+      enableLeadFollowUp: false,
+      enableScheduledReturns: true,
+    });
   } catch (e) {
     console.warn('⚠️ followUpCron não disponível:', e.message);
   }
